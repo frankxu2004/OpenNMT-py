@@ -1,3 +1,4 @@
+import json
 from pprint import pprint
 from multiprocessing import Pool
 import munkres
@@ -116,8 +117,7 @@ def main():
         retrieved = p.map(retrieve, rd.records)
 
     with open('retrieved.json', 'w', encoding='utf-8') as of:
-        for s in retrieved:
-            of.write(str(s[0][0]) + '\n')
+        json.dump(retrieved, of)
 
 
 if __name__ == '__main__':
