@@ -136,12 +136,16 @@ def main():
 
             if opt.attn_debug:
                 srcs = trans.src_raw
+                src_feats = trans.src_feats
                 preds = trans.pred_sents[0]
                 preds.append('</s>')
                 attns = trans.attns[0].tolist()
                 header_format = "{:>10.10} " + "{:>10.7} " * len(srcs)
                 row_format = "{:>10.10} " + "{:>10.7f} " * len(srcs)
-                output = header_format.format("", *trans.src_raw) + '\n'
+                if src_feats:
+                    output = header_format.format("", *list(map(lambda x: '|'.join(x), zip(trans.src_raw, *src_feats)))) + '\n'
+                else:
+                    output = header_format.format("", *trans.src_raw) + '\n'
                 for word, row in zip(preds, attns):
                     max_index = row.index(max(row))
                     row_format = row_format.replace(

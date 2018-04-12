@@ -78,9 +78,15 @@ class TranslationBuilder(object):
                 src_vocab = self.data.src_vocabs[inds[b]] \
                   if self.data.src_vocabs else None
                 src_raw = self.data.examples[inds[b]].src
+                src_attr_dict = self.data.examples[inds[b]].__dict__
+                src_feats = []
+                for src_attr in sorted(src_attr_dict.keys()):
+                    if src_attr.startswith('src_feat'):
+                        src_feats.append(getattr(self.data.examples[inds[b]], src_attr))
             else:
                 src_vocab = None
                 src_raw = None
+                src_feats = None
             pred_sents = [self._build_target_tokens(
                 src[:, b] if src is not None else None,
                 src_vocab, src_raw,
@@ -94,7 +100,7 @@ class TranslationBuilder(object):
                     tgt[1:, b] if tgt is not None else None, None)
 
             translation = Translation(src[:, b] if src is not None else None,
-                                      src_raw, pred_sents,
+                                      src_raw, src_feats, pred_sents,
                                       attn[b], pred_score[b], gold_sent,
                                       gold_score[b])
             translations.append(translation)
@@ -117,10 +123,11 @@ class Translation(object):
         gold_score ([float]): log-prob of gold translation
 
     """
-    def __init__(self, src, src_raw, pred_sents,
+    def __init__(self, src, src_raw, src_feats, pred_sents,
                  attn, pred_scores, tgt_sent, gold_score):
         self.src = src
         self.src_raw = src_raw
+        self.src_feats = src_feats
         self.pred_sents = pred_sents
         self.attns = attn
         self.pred_scores = pred_scores
@@ -131,7 +138,10 @@ class Translation(object):
         """
         Log translation to stdout.
         """
-        output = '\nSENT {}: {}\n'.format(sent_number, self.src_raw)
+        if self.src_feats:
+            output = '\nSENT {}: {}\n'.format(sent_number, list(zip(self.src_raw, *self.src_feats)))
+        else:
+            output = '\nSENT {}: {}\n'.format(sent_number, self.src_raw)
 
         best_pred = self.pred_sents[0]
         best_score = self.pred_scores[0]

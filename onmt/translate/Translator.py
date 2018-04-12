@@ -179,6 +179,7 @@ class Translator(object):
 
         # (4) Extract sentences from beam.
         ret = self._from_beam(beam)
+
         ret["gold_score"] = [0] * batch_size
         if "tgt" in batch.__dict__:
             ret["gold_score"] = self._run_target(batch, data)
