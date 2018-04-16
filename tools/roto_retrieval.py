@@ -14,8 +14,13 @@ class Record(object):
         self.entity = entity
         self.value = value
 
-    def __repr__(self):
+    def __str__(self):
         return "{}|{}|{}".format(self.rel, self.entity, self.value)
+
+
+class MyEncoder(json.JSONEncoder):
+    def default(self, o):
+        return o.__dict__
 
 
 class RecordDataset(object):
@@ -117,7 +122,7 @@ def main():
         retrieved = p.map(retrieve, rd.records)
 
     with open('retrieved.json', 'w', encoding='utf-8') as of:
-        json.dump(retrieved, of)
+        json.dump(retrieved, of, cls=MyEncoder)
 
 
 if __name__ == '__main__':

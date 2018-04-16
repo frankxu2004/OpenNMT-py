@@ -236,6 +236,45 @@ class Trainer(object):
 
         return stats
 
+    def align(self, valid_iter):
+        """ Validate and align model.
+            valid_iter: validate data iterator
+        Returns:
+            :obj:`onmt.Statistics`: validation loss statistics
+        """
+        # Set model in validating mode.
+        self.model.eval()
+
+        alignments = []
+        data = []
+        for batch in valid_iter:
+            src = onmt.io.make_features(batch, 'src', self.data_type)
+            if self.data_type == 'text':
+                _, src_lengths = batch.src
+            else:
+                src_lengths = None
+
+            tgt = onmt.io.make_features(batch, 'tgt')
+            # Sorting
+            inds, perm = torch.sort(batch.indices.data)
+            src_lengths_sorted = src_lengths.index_select(0, perm)
+            src_sorted = batch.src[0].data.index_select(1, perm)
+            src_feat_0_sorted = batch.src_feat_0.data.index_select(1, perm)
+            src_feat_1_sorted = batch.src_feat_1.data.index_select(1, perm)
+            tgt_sorted = batch.tgt.data.index_select(1, perm)
+
+            # F-prop through the model.
+            outputs, attns, _ = self.model(src, tgt, src_lengths)
+            alignments.extend(torch.unbind(attns['std'].data.index_select(1, perm), dim=1))
+            data.extend(zip(torch.unbind(src_sorted, dim=1), torch.unbind(src_feat_0_sorted, dim=1),
+                            torch.unbind(src_feat_1_sorted, dim=1), torch.unbind(src_lengths_sorted, dim=0),
+                            torch.unbind(tgt_sorted, dim=1)))
+
+        # Set model back to training mode.
+        self.model.train()
+
+        return alignments, data
+
     def epoch_step(self, ppl, epoch):
         return self.optim.update_learning_rate(ppl, epoch)
 
