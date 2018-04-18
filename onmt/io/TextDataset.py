@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-
+import pickle
 from collections import Counter
 from itertools import chain
 import io
@@ -88,7 +88,8 @@ class TextDataset(ONMTDatasetBase):
                and 0 < len(example.tgt) <= tgt_seq_length
 
         filter_pred = filter_pred if use_filter_pred else lambda x: True
-
+        print(out_examples[0])
+        print(out_fields)
         super(TextDataset, self).__init__(
             out_examples, out_fields, filter_pred
         )
@@ -245,6 +246,8 @@ class TextDataset(ONMTDatasetBase):
             use_vocab=False, tensor_type=torch.LongTensor,
             sequential=False)
 
+        fields["aux_vec"] = torchtext.data.RawField()
+
         return fields
 
     @staticmethod
@@ -297,7 +300,7 @@ class ShardedTextCorpusIterator(object):
     into (example_dict, n_features) tuples when iterates.
     """
     def __init__(self, corpus_path, line_truncate, side, shard_size,
-                 assoc_iter=None):
+                 assoc_iter=None, aux_vec_path=None):
         """
         Args:
             corpus_path: the corpus file path.
@@ -320,6 +323,13 @@ class ShardedTextCorpusIterator(object):
         self.side = side
         self.shard_size = shard_size
         self.assoc_iter = assoc_iter
+        if aux_vec_path:
+            if "train" in corpus_path:
+                self.aux_vecs = torch.load(aux_vec_path + 'train.pkl')
+            else:
+                self.aux_vecs = torch.load(aux_vec_path + 'valid.pkl')
+        else:
+            self.aux_vecs = None
         self.last_pos = 0
         self.line_index = -1
         self.eof = False
@@ -363,6 +373,7 @@ class ShardedTextCorpusIterator(object):
                         raise StopIteration
 
                 line = self.corpus.readline()
+
                 if line == '':
                     self.eof = True
                     self.corpus.close()
@@ -370,7 +381,10 @@ class ShardedTextCorpusIterator(object):
 
                 self.line_index += 1
                 iteration_index += 1
-                yield self._example_dict_iter(line, iteration_index)
+                if self.aux_vecs:
+                    yield self._example_dict_iter(line, iteration_index, aux_vec=self.aux_vecs[self.line_index])
+                else:
+                    yield self._example_dict_iter(line, iteration_index)
 
     def hit_end(self):
         return self.eof
@@ -390,7 +404,7 @@ class ShardedTextCorpusIterator(object):
 
         return self.n_feats
 
-    def _example_dict_iter(self, line, index):
+    def _example_dict_iter(self, line, index, aux_vec=None):
         line = line.split()
         if self.line_truncate:
             line = line[:self.line_truncate]
@@ -403,5 +417,8 @@ class ShardedTextCorpusIterator(object):
             prefix = self.side + "_feat_"
             example_dict.update((prefix + str(j), f)
                                 for j, f in enumerate(feats))
+        if aux_vec is not None:
+            assert aux_vec.size(0) == len(words)
+            example_dict['aux_vec'] = aux_vec
 
         return example_dict

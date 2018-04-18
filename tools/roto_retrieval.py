@@ -27,6 +27,7 @@ class RecordDataset(object):
     def __init__(self, src_file, tgt_file):
         self.records = []
         with open(src_file, encoding='utf-8') as srcf, open(tgt_file, encoding='utf-8') as tgtf:
+            idx = 0
             for line_src, line_tgt in zip(srcf, tgtf):
                 ls = line_src.strip().split()
                 if ls:
@@ -39,7 +40,8 @@ class RecordDataset(object):
                             value = str(value)
                         r = Record(rel, entity, value)
                         records.append(r)
-                    self.records.append({'records': records, 'target': line_tgt.strip()})
+                    self.records.append({'idx': idx, 'records': records, 'target': line_tgt.strip()})
+                    idx += 1
 
         print("Number of records and tgts read: ", len(self.records))
 
@@ -97,16 +99,19 @@ class RecordDataset(object):
             if s[0] == highest_score:
                 # start calculating the min cost
                 km = munkres.Munkres()
-                cost_matrix = self.construct_cost_matrix(query_record['records'], s[-1]['records'])
+                cost_matrix = self.construct_cost_matrix(query_record['records'], s[1]['records'])
                 indexes = km.compute(cost_matrix)
                 total_cost = 0
+                filtered_indexes = []
                 for row, column in indexes:
                     value = cost_matrix[row][column]
-                    total_cost += value
+                    if value < LARGE_NUM:
+                        filtered_indexes.append((row, column))
+                        total_cost += value
                 #     print('(%d, %d) -> %d' % (row, column, value))
                 # print("total cost: %d" % total_cost)
-                highest_examples.append({'jaccard': s[0], 'min_cost': total_cost, 'alignment': indexes,
-                                         'retrieved': s[-1], 'query': query_record})
+                highest_examples.append({'jaccard': s[0], 'min_cost': total_cost, 'alignment': filtered_indexes,
+                                         'retrieved': s[1], 'query': query_record})
         highest_examples.sort(key=lambda x: x['min_cost'])
         return highest_examples[0]
 
@@ -118,10 +123,22 @@ def retrieve(query_record):
 def main():
     global rd
     rd = RecordDataset('../data/rotowire/roto-sent-data.train.src', '../data/rotowire/roto-sent-data.train.tgt')
-    with Pool(24) as p:
-        retrieved = p.map(retrieve, rd.records)
+    # with Pool(24) as p:
+    #     retrieved = p.map(retrieve, rd.records)
+    #
+    # with open('retrieved_train.json', 'w', encoding='utf-8') as of:
+    #     json.dump(retrieved, of, cls=MyEncoder)
 
-    with open('retrieved.json', 'w', encoding='utf-8') as of:
+    vrd = RecordDataset('../data/rotowire/roto-sent-data.valid.src', '../data/rotowire/roto-sent-data.valid.tgt')
+    with Pool(24) as p:
+        retrieved = p.map(retrieve, vrd.records)
+    with open('retrieved_valid.json', 'w', encoding='utf-8') as of:
+        json.dump(retrieved, of, cls=MyEncoder)
+
+    trd = RecordDataset('../data/rotowire/roto-sent-data.test.src', '../data/rotowire/roto-sent-data.test.tgt')
+    with Pool(24) as p:
+        retrieved = p.map(retrieve, trd.records)
+    with open('retrieved_test.json', 'w', encoding='utf-8') as of:
         json.dump(retrieved, of, cls=MyEncoder)
 
 

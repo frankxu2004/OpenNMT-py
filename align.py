@@ -7,6 +7,8 @@ import glob
 import os
 import sys
 import random
+import pickle
+import json
 from datetime import datetime
 
 import torch
@@ -20,7 +22,6 @@ import onmt.ModelConstructor
 import onmt.modules
 from onmt.Utils import use_gpu
 import onmt.opts
-
 
 parser = argparse.ArgumentParser(
     description='align.py',
@@ -74,6 +75,7 @@ if opt.exp_host != "":
 
 if opt.tensorboard:
     from tensorboardX import SummaryWriter
+
     writer = SummaryWriter(
         opt.tensorboard_log_dir + datetime.now().strftime("/%b-%d_%H-%M-%S"),
         comment="Onmt")
@@ -229,7 +231,8 @@ def make_loss_compute(model, tgt_vocab, opt, train=True):
     return compute
 
 
-def get_align(model, fields, optim, data_type):
+def get_align(model, fields, optim, data_type, corpus_type):
+    assert corpus_type in ["train", "valid"]
     train_loss = make_loss_compute(model, fields["tgt"].vocab, opt)
     valid_loss = make_loss_compute(model, fields["tgt"].vocab, opt,
                                    train=False)
@@ -246,15 +249,16 @@ def get_align(model, fields, optim, data_type):
     print('\nStart aligning...')
     print(' * batch size: %d' % opt.valid_batch_size)
 
-    valid_iter = make_dataset_iter(lazily_load_dataset("train"),
+    valid_iter = make_dataset_iter(lazily_load_dataset(corpus_type),
                                    fields, opt,
                                    is_train=False)
-    alignments, data = trainer.align(valid_iter)
+    alignments, decoder_outputs, data = trainer.align(valid_iter)
     itos = fields['src'].vocab.itos
     itof0 = fields['src_feat_0'].vocab.itos
     itof1 = fields['src_feat_1'].vocab.itos
     itot = fields['tgt'].vocab.itos
-    for align, (src, src_feat_0, src_feat_1, src_len, tgt) in zip(alignments, data):
+    aligned_vectors = []
+    for align, decoder_hidden, (src, src_feat_0, src_feat_1, src_len, tgt) in zip(alignments, decoder_outputs, data):
         tgt_len = 0
         for i in tgt:
             if i == 1:
@@ -262,14 +266,25 @@ def get_align(model, fields, optim, data_type):
             else:
                 tgt_len += 1
 
-        srcs = ['|'.join([itos[s[0]], itof0[s[1]], itof1[s[2]]]) for s in zip(src[:src_len], src_feat_0[:src_len], src_feat_1[:src_len])]
+        cropped_align = align[:tgt_len - 1, :src_len]
+        cropped_decoder_hidden = decoder_hidden[:tgt_len - 1]
+
+        normalized_weight = nn.functional.normalize(cropped_align, p=1, dim=0)
+
+        weighted = torch.mm(normalized_weight.permute(1, 0), cropped_decoder_hidden)
+
+        srcs = ['|'.join([itos[s[0]], itof0[s[1]], itof1[s[2]]])
+                for s in zip(src[:src_len], src_feat_0[:src_len], src_feat_1[:src_len])]
 
         for x in range(1, tgt_len):
             word = itot[tgt[x]]
             max_value, max_index = align[x - 1].max(0)
             aligned_src = srcs[int(max_index)]
-            print(word + '\t' + aligned_src + '\t' + '{:.6f}'.format(float(max_value)))
+            print(word + '\t' + aligned_src + '\t{:.6f}'.format(float(max_value)))
         print('\n')
+
+        aligned_vectors.append(weighted)
+    return aligned_vectors
 
 
 def check_save_model_path():
@@ -448,6 +463,25 @@ def show_optimizer_state(optim):
             element))
 
 
+def get_retrieved_vectors(weighted, corpus_type):
+    vec_dim = weighted[0].size(1)
+    with open('tools/retrieved_{}.json'.format(corpus_type), encoding='utf-8') as f:
+        retrieved = json.load(f)
+    to_save = []
+    for sample in retrieved:
+        alignment = dict(sample['alignment'])
+        retrieved_id = sample['retrieved']['idx']
+        source_len = len(sample['query']['records'])
+        masked_vec = torch.FloatTensor(source_len, vec_dim)
+        for i in range(source_len):
+            if i in alignment:
+                masked_vec[i] = weighted[retrieved_id][alignment[i]]
+            else:
+                masked_vec[i] = torch.zeros(vec_dim)
+        to_save.append(masked_vec)
+    return to_save
+
+
 def main():
     # Load checkpoint if we resume from a previous training.
     if opt.train_from:
@@ -481,7 +515,14 @@ def main():
     optim = build_optim(model, checkpoint)
 
     # Get alignment.
-    get_align(model, fields, optim, data_type)
+    weighted = get_align(model, fields, optim, data_type, "train")
+    to_save = get_retrieved_vectors(weighted, "train")
+    with open('tools/retrieved_vectors_train.pkl', 'wb') as f:
+        torch.save(to_save, f)
+
+    to_save = get_retrieved_vectors(weighted, "valid")
+    with open('tools/retrieved_vectors_valid.pkl', 'wb') as f:
+        torch.save(to_save, f)
 
 
 if __name__ == "__main__":

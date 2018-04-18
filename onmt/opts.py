@@ -139,6 +139,8 @@ def preprocess_opts(parser):
     group.add_argument('-src_dir', default="",
                        help="Source directory for image or audio files.")
 
+    group.add_argument('-aux_vec_path', default="", help="Auxiliary vector pickle file")
+
     group.add_argument('-save_data', required=True,
                        help="Output file for the prepared data")
 

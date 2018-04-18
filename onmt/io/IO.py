@@ -280,7 +280,9 @@ def build_vocab(train_dataset_files, fields, data_type, share_vocab,
         for ex in dataset.examples:
             for k in fields:
                 val = getattr(ex, k, None)
-                if val is not None and not fields[k].sequential:
+                if type(fields[k]) is torchtext.data.RawField:
+                    continue
+                elif val is not None and not fields[k].sequential:
                     val = [val]
                 elif k == 'src' and src_vocab:
                     val = [item for item in val if item in src_vocab]

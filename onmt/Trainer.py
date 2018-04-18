@@ -237,16 +237,16 @@ class Trainer(object):
         return stats
 
     def align(self, valid_iter):
-        """ Validate and align model.
+        """ Align model.
             valid_iter: validate data iterator
         Returns:
             :obj:`onmt.Statistics`: validation loss statistics
         """
         # Set model in validating mode.
         self.model.eval()
-
         alignments = []
         data = []
+        decoder_outputs = []
         for batch in valid_iter:
             src = onmt.io.make_features(batch, 'src', self.data_type)
             if self.data_type == 'text':
@@ -262,9 +262,9 @@ class Trainer(object):
             src_feat_0_sorted = batch.src_feat_0.data.index_select(1, perm)
             src_feat_1_sorted = batch.src_feat_1.data.index_select(1, perm)
             tgt_sorted = batch.tgt.data.index_select(1, perm)
-
             # F-prop through the model.
             outputs, attns, _ = self.model(src, tgt, src_lengths)
+            decoder_outputs.extend(torch.unbind(outputs.data.index_select(1, perm), dim=1))
             alignments.extend(torch.unbind(attns['std'].data.index_select(1, perm), dim=1))
             data.extend(zip(torch.unbind(src_sorted, dim=1), torch.unbind(src_feat_0_sorted, dim=1),
                             torch.unbind(src_feat_1_sorted, dim=1), torch.unbind(src_lengths_sorted, dim=0),
@@ -273,7 +273,7 @@ class Trainer(object):
         # Set model back to training mode.
         self.model.train()
 
-        return alignments, data
+        return alignments, decoder_outputs, data
 
     def epoch_step(self, ppl, epoch):
         return self.optim.update_learning_rate(ppl, epoch)
