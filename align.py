@@ -524,6 +524,10 @@ def main():
     with open('tools/retrieved_vectors_valid.pkl', 'wb') as f:
         torch.save(to_save, f)
 
+    to_save = get_retrieved_vectors(weighted, "test")
+    with open('tools/retrieved_vectors_test.pkl', 'wb') as f:
+        torch.save(to_save, f)
+
 
 if __name__ == "__main__":
     main()

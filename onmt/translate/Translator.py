@@ -26,7 +26,6 @@ def make_translator(opt, report_score=True, out_file=None):
 
     fields, model, model_opt = \
         onmt.ModelConstructor.load_test_model(opt, dummy_opt.__dict__)
-
     scorer = onmt.translate.GNMTGlobalScorer(opt.alpha,
                                              opt.beta,
                                              opt.coverage_penalty,
@@ -128,7 +127,7 @@ class Translator(object):
                 "log_probs": []}
 
     def translate(self, src_dir, src_path, tgt_path,
-                  batch_size, attn_debug=False):
+                  batch_size, attn_debug=False, aux_vec_path=None):
         data = onmt.io.build_dataset(self.fields,
                                      self.data_type,
                                      src_path,
@@ -138,8 +137,7 @@ class Translator(object):
                                      window_size=self.window_size,
                                      window_stride=self.window_stride,
                                      window=self.window,
-                                     use_filter_pred=self.use_filter_pred)
-
+                                     use_filter_pred=self.use_filter_pred, aux_vec_path=aux_vec_path)
         data_iter = onmt.io.OrderedIterator(
             dataset=data, device=self.gpu,
             batch_size=batch_size, train=False, sort=False,
@@ -270,8 +268,8 @@ class Translator(object):
         src_lengths = None
         if data_type == 'text':
             _, src_lengths = batch.src
-
-        enc_states, memory_bank = self.model.encoder(src, src_lengths)
+        aux_vec = getattr(batch, 'aux_vec', None)
+        enc_states, memory_bank = self.model.encoder(src, src_lengths, aux_vec=aux_vec)
         dec_states = self.model.decoder.init_decoder_state(
             src, memory_bank, enc_states)
 

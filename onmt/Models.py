@@ -77,19 +77,35 @@ class MeanEncoder(EncoderBase):
        num_layers (int): number of replicated layers
        embeddings (:obj:`onmt.modules.Embeddings`): embedding module to use
     """
-    def __init__(self, num_layers, embeddings):
+    def __init__(self, num_layers, embeddings, with_aux=False):
         super(MeanEncoder, self).__init__()
         self.num_layers = num_layers
         self.embeddings = embeddings
+        self.with_aux = with_aux
+        if self.with_aux:
+            # self.mlp = nn.Linear(600, 200)
+            # self.mlp1 = nn.Linear(800, 600)
+            self.mlp = nn.Linear(1200, 600)
 
-    def forward(self, src, lengths=None, encoder_state=None):
+    def forward(self, src, lengths=None, encoder_state=None, aux_vec=None):
         "See :obj:`EncoderBase.forward()`"
         self._check_args(src, lengths, encoder_state)
-
         emb = self.embeddings(src)
         s_len, batch, emb_dim = emb.size()
-        mean = emb.mean(0).expand(self.num_layers, batch, emb_dim)
+        mean = emb.mean(0)
+
+        if self.with_aux and aux_vec is not None:
+            aux = torch.zeros(s_len, batch, 600)
+            for idx, vec in enumerate(aux_vec):
+                aux[:vec.size(0), idx, :] = vec
+            aux = Variable(aux).cuda()
+            # aux = self.mlp(aux)
+            # emb = self.mlp1(torch.cat((emb, aux), dim=2))
+            mean = self.mlp(torch.cat((mean, aux.mean(0)), dim=1))
+
+        mean = mean.expand(self.num_layers, batch, emb_dim)
         memory_bank = emb
+
         encoder_final = (mean, mean)
         return encoder_final, memory_bank
 
@@ -559,7 +575,7 @@ class NMTModel(nn.Module):
         self.encoder = encoder
         self.decoder = decoder
 
-    def forward(self, src, tgt, lengths, dec_state=None):
+    def forward(self, src, tgt, lengths, dec_state=None, aux_vec=None):
         """Forward propagate a `src` and `tgt` pair for training.
         Possible initialized with a beginning decoder state.
 
@@ -581,8 +597,7 @@ class NMTModel(nn.Module):
                  * final decoder state
         """
         tgt = tgt[:-1]  # exclude last target from inputs
-
-        enc_final, memory_bank = self.encoder(src, lengths)
+        enc_final, memory_bank = self.encoder(src, lengths, aux_vec=aux_vec)
         enc_state = \
             self.decoder.init_decoder_state(src, memory_bank, enc_final)
         decoder_outputs, dec_state, attns = \

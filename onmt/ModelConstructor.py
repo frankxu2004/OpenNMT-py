@@ -68,7 +68,7 @@ def make_encoder(opt, embeddings):
                           opt.cnn_kernel_width,
                           opt.dropout, embeddings)
     elif opt.encoder_type == "mean":
-        return MeanEncoder(opt.enc_layers, embeddings)
+        return MeanEncoder(opt.enc_layers, embeddings, opt.with_aux)
     else:
         # "rnn" or "brnn"
         return RNNEncoder(opt.rnn_type, opt.brnn, opt.enc_layers,

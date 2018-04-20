@@ -119,6 +119,9 @@ def model_opts(parser):
     group.add_argument('-lambda_coverage', type=float, default=1,
                        help='Lambda value for coverage.')
 
+    # retrieval based additional parameters
+    group.add_argument('-with_aux', action="store_true")
+
 
 def preprocess_opts(parser):
     # Data options
@@ -476,6 +479,9 @@ def translate_opts(parser):
                        help='Window stride for spectrogram in seconds')
     group.add_argument('-window', default='hamming',
                        help='Window type for spectrogram generation')
+
+    # Options related to aux_vec
+    group.add_argument('-aux_vec_path', default="", help="Auxiliary vector pickle file")
 
 
 def add_md_help_argument(parser):

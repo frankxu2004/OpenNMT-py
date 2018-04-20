@@ -35,6 +35,7 @@ class TextDataset(ONMTDatasetBase):
             use_filter_pred (bool): use a custom filter predicate to filter
                 out examples?
     """
+
     def __init__(self, fields, src_examples_iter, tgt_examples_iter,
                  num_src_feats=0, num_tgt_feats=0,
                  src_seq_length=0, tgt_seq_length=0,
@@ -85,7 +86,7 @@ class TextDataset(ONMTDatasetBase):
 
         def filter_pred(example):
             return 0 < len(example.src) <= src_seq_length \
-               and 0 < len(example.tgt) <= tgt_seq_length
+                   and 0 < len(example.tgt) <= tgt_seq_length
 
         filter_pred = filter_pred if use_filter_pred else lambda x: True
         print(out_examples[0])
@@ -130,7 +131,7 @@ class TextDataset(ONMTDatasetBase):
         return scores
 
     @staticmethod
-    def make_text_examples_nfeats_tpl(path, truncate, side):
+    def make_text_examples_nfeats_tpl(path, truncate, side, aux_vec_path=None):
         """
         Args:
             path (str): location of a src or tgt file.
@@ -145,6 +146,13 @@ class TextDataset(ONMTDatasetBase):
         if path is None:
             return (None, 0)
 
+        aux_vecs = None
+        if side == 'src' and aux_vec_path:
+            if "valid" in path:
+                aux_vecs = torch.load(aux_vec_path + 'valid.pkl')
+            elif "test" in path:
+                aux_vecs = torch.load(aux_vec_path + 'test.pkl')
+
         # All examples have same number of features, so we peek first one
         # to get the num_feats.
         examples_nfeats_iter = \
@@ -155,6 +163,15 @@ class TextDataset(ONMTDatasetBase):
 
         # Chain back the first element - we only want to peek it.
         examples_nfeats_iter = chain([first_ex], examples_nfeats_iter)
+
+        def _add_aux_vec(example_iter, aux_vecs):
+            for example, aux_vec in zip(example_iter, aux_vecs):
+                assert len(example[0]['src']) == aux_vec.size(0)
+                example[0]['aux_vec'] = aux_vec
+                yield example
+
+        if aux_vecs is not None:
+            examples_nfeats_iter = _add_aux_vec(examples_nfeats_iter, aux_vecs)
         examples_iter = (ex for ex, nfeats in examples_nfeats_iter)
 
         return (examples_iter, num_feats)
@@ -206,7 +223,7 @@ class TextDataset(ONMTDatasetBase):
             include_lengths=True)
 
         for j in range(n_src_features):
-            fields["src_feat_"+str(j)] = \
+            fields["src_feat_" + str(j)] = \
                 torchtext.data.Field(pad_token=PAD_WORD)
 
         fields["tgt"] = torchtext.data.Field(
@@ -214,7 +231,7 @@ class TextDataset(ONMTDatasetBase):
             pad_token=PAD_WORD)
 
         for j in range(n_tgt_features):
-            fields["tgt_feat_"+str(j)] = \
+            fields["tgt_feat_" + str(j)] = \
                 torchtext.data.Field(init_token=BOS_WORD, eos_token=EOS_WORD,
                                      pad_token=PAD_WORD)
 
@@ -299,6 +316,7 @@ class ShardedTextCorpusIterator(object):
     shards of size `shard_size`. Then, for each shard, it processes
     into (example_dict, n_features) tuples when iterates.
     """
+
     def __init__(self, corpus_path, line_truncate, side, shard_size,
                  assoc_iter=None, aux_vec_path=None):
         """

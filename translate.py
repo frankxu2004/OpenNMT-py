@@ -3,19 +3,13 @@ from __future__ import division, unicode_literals
 import argparse
 
 from onmt.translate.Translator import make_translator
-
-import onmt.io
-import onmt.translate
-import onmt
-import onmt.ModelConstructor
-import onmt.modules
 import onmt.opts
 
 
 def main(opt):
     translator = make_translator(opt, report_score=True)
     translator.translate(opt.src_dir, opt.src, opt.tgt,
-                         opt.batch_size, opt.attn_debug)
+                         opt.batch_size, opt.attn_debug, aux_vec_path=opt.aux_vec_path)
 
 
 if __name__ == "__main__":
