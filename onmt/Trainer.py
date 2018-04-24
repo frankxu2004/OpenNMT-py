@@ -266,7 +266,7 @@ class Trainer(object):
             tgt_sorted = batch.tgt.data.index_select(1, perm)
 
             # F-prop through the model.
-            outputs, attns, _ = self.model(src, tgt, src_lengths,  aux_vec=aux_vec)
+            outputs, attns, _ = self.model(src, tgt, src_lengths, aux_vec=aux_vec)
 
             decoder_outputs.extend(torch.unbind(outputs.data.index_select(1, perm), dim=1))
             alignments.extend(torch.unbind(attns['std'].data.index_select(1, perm), dim=1))
@@ -330,7 +330,8 @@ class Trainer(object):
 
             dec_state = None
             src = onmt.io.make_features(batch, 'src', self.data_type)
-            aux_vec = getattr(batch, 'aux_vec')
+            aux_vec = getattr(batch, 'aux_vec', None)
+
             if self.data_type == 'text':
                 _, src_lengths = batch.src
                 report_stats.n_src_words += src_lengths.sum()

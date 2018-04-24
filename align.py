@@ -258,6 +258,7 @@ def get_align(model, fields, optim, data_type, corpus_type):
     itof1 = fields['src_feat_1'].vocab.itos
     itot = fields['tgt'].vocab.itos
     aligned_vectors = []
+    normalized_alignments = []
     for align, decoder_hidden, (src, src_feat_0, src_feat_1, src_len, tgt) in zip(alignments, decoder_outputs, data):
         tgt_len = 0
         for i in tgt:
@@ -270,6 +271,7 @@ def get_align(model, fields, optim, data_type, corpus_type):
         cropped_decoder_hidden = decoder_hidden[:tgt_len - 1]
 
         normalized_weight = nn.functional.normalize(cropped_align, p=1, dim=0)
+        normalized_alignments.append(normalized_weight)
 
         weighted = torch.mm(normalized_weight.permute(1, 0), cropped_decoder_hidden)
 
@@ -284,7 +286,7 @@ def get_align(model, fields, optim, data_type, corpus_type):
         print('\n')
 
         aligned_vectors.append(weighted)
-    return aligned_vectors
+    return aligned_vectors, normalized_alignments
 
 
 def check_save_model_path():
@@ -463,23 +465,26 @@ def show_optimizer_state(optim):
             element))
 
 
-def get_retrieved_vectors(weighted, corpus_type):
+def get_retrieved_vectors(weighted, normalized_alignments, corpus_type):
     vec_dim = weighted[0].size(1)
     with open('tools/retrieved_{}.json'.format(corpus_type), encoding='utf-8') as f:
         retrieved = json.load(f)
     to_save = []
+    alignment_save = []
     for sample in retrieved:
         alignment = dict(sample['alignment'])
         retrieved_id = sample['retrieved']['idx']
         source_len = len(sample['query']['records'])
-        masked_vec = torch.FloatTensor(source_len, vec_dim)
+        retrieved_align = normalized_alignments[retrieved_id]
+        masked_vec = torch.zeros((source_len, vec_dim))
+        masked_align = torch.zeros((source_len, retrieved_align.size(0)))
         for i in range(source_len):
             if i in alignment:
                 masked_vec[i] = weighted[retrieved_id][alignment[i]]
-            else:
-                masked_vec[i] = torch.zeros(vec_dim)
+                masked_align[i] = retrieved_align[:, alignment[i]]
         to_save.append(masked_vec)
-    return to_save
+        alignment_save.append(masked_align)
+    return to_save, alignment_save
 
 
 def main():
@@ -515,18 +520,25 @@ def main():
     optim = build_optim(model, checkpoint)
 
     # Get alignment.
-    weighted = get_align(model, fields, optim, data_type, "train")
-    to_save = get_retrieved_vectors(weighted, "train")
+    weighted, normalized_alignments = get_align(model, fields, optim, data_type, "train")
+
+    to_save, alignment_save = get_retrieved_vectors(weighted, normalized_alignments, "train")
     with open('tools/retrieved_vectors_train.pkl', 'wb') as f:
         torch.save(to_save, f)
+    with open('tools/retrieved_alignments_train.pkl', 'wb') as f:
+        torch.save(alignment_save, f)
 
-    to_save = get_retrieved_vectors(weighted, "valid")
+    to_save, alignment_save = get_retrieved_vectors(weighted, normalized_alignments, "valid")
     with open('tools/retrieved_vectors_valid.pkl', 'wb') as f:
         torch.save(to_save, f)
+    with open('tools/retrieved_alignments_valid.pkl', 'wb') as f:
+        torch.save(alignment_save, f)
 
-    to_save = get_retrieved_vectors(weighted, "test")
+    to_save, alignment_save = get_retrieved_vectors(weighted, normalized_alignments, "test")
     with open('tools/retrieved_vectors_test.pkl', 'wb') as f:
         torch.save(to_save, f)
+    with open('tools/retrieved_alignments_test.pkl', 'wb') as f:
+        torch.save(alignment_save, f)
 
 
 if __name__ == "__main__":
