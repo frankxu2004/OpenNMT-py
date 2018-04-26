@@ -2,6 +2,7 @@ import json
 from pprint import pprint
 from multiprocessing import Pool
 import munkres
+from sklearn.feature_extraction.text import TfidfVectorizer
 
 # ignore_rels = ['HOME_AWAY', 'TEAM_NAME', 'PLAYER_NAME']
 ignore_rels = []
@@ -26,6 +27,7 @@ class MyEncoder(json.JSONEncoder):
 class RecordDataset(object):
     def __init__(self, src_file, tgt_file):
         self.records = []
+        self.normalized_targets = []
         with open(src_file, encoding='utf-8') as srcf, open(tgt_file, encoding='utf-8') as tgtf:
             idx = 0
             for line_src, line_tgt in zip(srcf, tgtf):
@@ -44,6 +46,19 @@ class RecordDataset(object):
                     idx += 1
 
         print("Number of records and tgts read: ", len(self.records))
+        self.normalize_text()
+        self.sklearn_tfidf = TfidfVectorizer(sublinear_tf=True, tokenizer=lambda x: x, preprocessor=lambda x: x,
+                                             lowercase=False, token_pattern=None)
+        self.tfidf_score = self.sklearn_tfidf.fit_transform(self.normalized_targets)
+
+    def normalize_text(self):
+        for r in self.records:
+            tgt_tokens = r['target'].split()
+            src_tokens = [str(x.value) for x in r['records']]
+            for i in range(len(tgt_tokens)):
+                if tgt_tokens[i] in src_tokens:
+                    tgt_tokens[i] = 'PLACEHOLDER'
+            self.normalized_targets.append(tgt_tokens)
 
     @staticmethod
     def generalized_jaccard(list_a, list_b):
@@ -86,6 +101,21 @@ class RecordDataset(object):
         target_rels = [r.rel for r in target]
         return self.generalized_jaccard(query_rels, target_rels)
 
+    def calculate_alignment(self, a_records, b_records):
+        km = munkres.Munkres()
+        cost_matrix = self.construct_cost_matrix(a_records, b_records)
+        indexes = km.compute(cost_matrix)
+        total_cost = 0
+        filtered_indexes = []
+        for row, column in indexes:
+            value = cost_matrix[row][column]
+            if value < LARGE_NUM:
+                filtered_indexes.append((row, column))
+                total_cost += value
+        #     print('(%d, %d) -> %d' % (row, column, value))
+        # print("total cost: %d" % total_cost)
+        return filtered_indexes, total_cost
+
     def retrieve(self, query_record, topk=3):
         scores = []
         for example in self.records:
@@ -98,47 +128,58 @@ class RecordDataset(object):
         for s in scores:
             if s[0] == highest_score:
                 # start calculating the min cost
-                km = munkres.Munkres()
-                cost_matrix = self.construct_cost_matrix(query_record['records'], s[1]['records'])
-                indexes = km.compute(cost_matrix)
-                total_cost = 0
-                filtered_indexes = []
-                for row, column in indexes:
-                    value = cost_matrix[row][column]
-                    if value < LARGE_NUM:
-                        filtered_indexes.append((row, column))
-                        total_cost += value
-                #     print('(%d, %d) -> %d' % (row, column, value))
-                # print("total cost: %d" % total_cost)
+                filtered_indexes, total_cost = self.calculate_alignment(query_record['records'], s[1]['records'])
                 highest_examples.append({'jaccard': s[0], 'min_cost': total_cost, 'alignment': filtered_indexes,
                                          'retrieved': s[1], 'query': query_record})
         highest_examples.sort(key=lambda x: x['min_cost'])
         return highest_examples[0]
+
+    def retrieve_with_target(self, query_record):
+        query_tgt_tokens = query_record['target'].split()
+        query_src_tokens = [str(x.value) for x in query_record['records']]
+        for i in range(len(query_tgt_tokens)):
+            if query_tgt_tokens[i] in query_src_tokens:
+                query_tgt_tokens[i] = 'PLACEHOLDER'
+
+        scores = []
+        for idx, sent in enumerate(self.normalized_targets):
+            score = 0
+            for token in query_tgt_tokens:
+                if token in sent:
+                    score += self.tfidf_score[idx, self.sklearn_tfidf.vocabulary_[token]]
+            scores.append((idx, score))
+        scores.sort(key=lambda x: x[1], reverse=True)
+        filtered_indexes, total_cost = self.calculate_alignment(query_record['records'], self.records[scores[0][0]]['records'])
+        return {'score': scores[0][1], 'cost': total_cost, 'alignment': filtered_indexes,
+                'retrieved': self.records[scores[0][0]], 'query': query_record}
 
 
 def retrieve(query_record):
     return rd.retrieve(query_record)
 
 
+def retrieve_with_target(query_record):
+    return rd.retrieve_with_target(query_record)
+
+
 def main():
     global rd
     rd = RecordDataset('../data/rotowire/roto-sent-data.train.src', '../data/rotowire/roto-sent-data.train.tgt')
-    # with Pool(24) as p:
-    #     retrieved = p.map(retrieve, rd.records)
-    #
-    # with open('retrieved_train.json', 'w', encoding='utf-8') as of:
-    #     json.dump(retrieved, of, cls=MyEncoder)
+    with Pool(24) as p:
+        retrieved = p.map(retrieve_with_target, rd.records)
+    with open('retrieved_target_train.json', 'w', encoding='utf-8') as of:
+        json.dump(retrieved, of, cls=MyEncoder)
 
     vrd = RecordDataset('../data/rotowire/roto-sent-data.valid.src', '../data/rotowire/roto-sent-data.valid.tgt')
     with Pool(24) as p:
-        retrieved = p.map(retrieve, vrd.records)
-    with open('retrieved_valid.json', 'w', encoding='utf-8') as of:
+        retrieved = p.map(retrieve_with_target, vrd.records)
+    with open('retrieved_target_valid.json', 'w', encoding='utf-8') as of:
         json.dump(retrieved, of, cls=MyEncoder)
 
     trd = RecordDataset('../data/rotowire/roto-sent-data.test.src', '../data/rotowire/roto-sent-data.test.tgt')
     with Pool(24) as p:
-        retrieved = p.map(retrieve, trd.records)
-    with open('retrieved_test.json', 'w', encoding='utf-8') as of:
+        retrieved = p.map(retrieve_with_target, trd.records)
+    with open('retrieved_target_test.json', 'w', encoding='utf-8') as of:
         json.dump(retrieved, of, cls=MyEncoder)
 
 

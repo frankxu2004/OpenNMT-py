@@ -7,7 +7,6 @@ import glob
 import os
 import sys
 import random
-import pickle
 import json
 from datetime import datetime
 
@@ -271,6 +270,7 @@ def get_align(model, fields, optim, data_type, corpus_type):
         cropped_decoder_hidden = decoder_hidden[:tgt_len - 1]
 
         normalized_weight = nn.functional.normalize(cropped_align, p=1, dim=0)
+
         normalized_alignments.append(normalized_weight)
 
         weighted = torch.mm(normalized_weight.permute(1, 0), cropped_decoder_hidden)
@@ -521,7 +521,8 @@ def main():
 
     # Get alignment.
     weighted, normalized_alignments = get_align(model, fields, optim, data_type, "train")
-
+    with open('tools/alignment_train.pkl', 'wb') as f:
+        torch.save(normalized_alignments, f)
     to_save, alignment_save = get_retrieved_vectors(weighted, normalized_alignments, "train")
     with open('tools/retrieved_vectors_train.pkl', 'wb') as f:
         torch.save(to_save, f)

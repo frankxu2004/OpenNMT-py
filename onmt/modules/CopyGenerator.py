@@ -101,6 +101,22 @@ class CopyGenerator(nn.Module):
         copy_prob = copy_prob.contiguous().view(-1, cvocab)
         return torch.cat([out_prob, copy_prob], 1)
 
+    def get_copy_prob(self, hidden, attn):
+        batch_size = hidden.size(1)
+        hidden = hidden.view(-1, hidden.size(2))
+        attn = attn.view(-1, attn.size(2))
+
+        # CHECKS
+        batch_by_tlen, _ = hidden.size()
+        batch_by_tlen_, slen = attn.size()
+        aeq(batch_by_tlen, batch_by_tlen_)
+
+        # Probability of copying p(z=1) batch.
+        p_copy = F.sigmoid(self.linear_copy(hidden))
+        mul_attn = torch.mul(attn, p_copy.expand_as(attn))
+
+        return p_copy.view(-1, batch_size), mul_attn.view(-1, batch_size, mul_attn.size(1))
+
 
 class CopyGeneratorCriterion(object):
     def __init__(self, vocab_size, force_copy, pad, eps=1e-20):

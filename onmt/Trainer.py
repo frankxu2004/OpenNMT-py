@@ -257,6 +257,11 @@ class Trainer(object):
                 src_lengths = None
             aux_vec = getattr(batch, 'aux_vec', None)
             tgt = onmt.io.make_features(batch, 'tgt')
+
+            # F-prop through the model.
+            outputs, attns, _ = self.model(src, tgt, src_lengths, aux_vec=aux_vec)
+            p_copy, mul_attn = self.model.generator.get_copy_prob(outputs, attns['std'])
+
             # Sorting
             inds, perm = torch.sort(batch.indices.data)
             src_lengths_sorted = src_lengths.index_select(0, perm)
@@ -265,11 +270,9 @@ class Trainer(object):
             src_feat_1_sorted = batch.src_feat_1.data.index_select(1, perm)
             tgt_sorted = batch.tgt.data.index_select(1, perm)
 
-            # F-prop through the model.
-            outputs, attns, _ = self.model(src, tgt, src_lengths, aux_vec=aux_vec)
-
             decoder_outputs.extend(torch.unbind(outputs.data.index_select(1, perm), dim=1))
             alignments.extend(torch.unbind(attns['std'].data.index_select(1, perm), dim=1))
+            # alignments.extend(torch.unbind(mul_attn.data.index_select(1, perm), dim=1))
             data.extend(zip(torch.unbind(src_sorted, dim=1), torch.unbind(src_feat_0_sorted, dim=1),
                             torch.unbind(src_feat_1_sorted, dim=1), torch.unbind(src_lengths_sorted, dim=0),
                             torch.unbind(tgt_sorted, dim=1)))
