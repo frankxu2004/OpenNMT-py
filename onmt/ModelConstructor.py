@@ -53,7 +53,7 @@ def make_embeddings(opt, word_dict, feature_dicts, for_encoder=True):
                       sparse=opt.optim == "sparseadam")
 
 
-def make_encoder(opt, embeddings):
+def make_encoder(opt, embeddings, retrieved_embeddings=None):
     """
     Various encoder dispatcher function.
     Args:
@@ -68,7 +68,8 @@ def make_encoder(opt, embeddings):
                           opt.cnn_kernel_width,
                           opt.dropout, embeddings)
     elif opt.encoder_type == "mean":
-        return MeanEncoder(opt.enc_layers, embeddings, opt.with_aux)
+        return MeanEncoder(opt.enc_layers, embeddings, with_aux=opt.with_aux, rnn_size=opt.rnn_size,
+                           dropout=opt.dropout, retrieved_embeddings=retrieved_embeddings)
     else:
         # "rnn" or "brnn"
         return RNNEncoder(opt.rnn_type, opt.brnn, opt.enc_layers,
@@ -101,7 +102,8 @@ def make_decoder(opt, embeddings):
                                    opt.copy_attn,
                                    opt.dropout,
                                    embeddings,
-                                   opt.reuse_copy_attn)
+                                   opt.reuse_copy_attn,
+                                   opt.use_retrieved)
     else:
         return StdRNNDecoder(opt.rnn_type, opt.brnn,
                              opt.dec_layers, opt.rnn_size,
@@ -152,7 +154,12 @@ def make_base_model(model_opt, fields, gpu, checkpoint=None):
         feature_dicts = onmt.io.collect_feature_vocabs(fields, 'src')
         src_embeddings = make_embeddings(model_opt, src_dict,
                                          feature_dicts)
-        encoder = make_encoder(model_opt, src_embeddings)
+        if model_opt.use_retrieved:
+            retrieved_dict = fields['retrieved_tgt'].vocab
+            retrieved_embeddings = make_embeddings(model_opt, retrieved_dict, [])
+        else:
+            retrieved_embeddings = None
+        encoder = make_encoder(model_opt, src_embeddings, retrieved_embeddings=retrieved_embeddings)
     elif model_opt.model_type == "img":
         encoder = ImageEncoder(model_opt.enc_layers,
                                model_opt.brnn,

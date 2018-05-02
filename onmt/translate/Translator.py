@@ -127,7 +127,7 @@ class Translator(object):
                 "log_probs": []}
 
     def translate(self, src_dir, src_path, tgt_path,
-                  batch_size, attn_debug=False, aux_vec_path=None):
+                  batch_size, attn_debug=False, aux_vec_path=None, retrieved_path=None):
         data = onmt.io.build_dataset(self.fields,
                                      self.data_type,
                                      src_path,
@@ -137,7 +137,9 @@ class Translator(object):
                                      window_size=self.window_size,
                                      window_stride=self.window_stride,
                                      window=self.window,
-                                     use_filter_pred=self.use_filter_pred, aux_vec_path=aux_vec_path)
+                                     use_filter_pred=self.use_filter_pred,
+                                     aux_vec_path=aux_vec_path,
+                                     retrieved_path=retrieved_path)
         data_iter = onmt.io.OrderedIterator(
             dataset=data, device=self.gpu,
             batch_size=batch_size, train=False, sort=False,

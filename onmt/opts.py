@@ -121,6 +121,7 @@ def model_opts(parser):
 
     # retrieval based additional parameters
     group.add_argument('-with_aux', action="store_true")
+    group.add_argument('-use_retrieved', action='store_true')
 
 
 def preprocess_opts(parser):
@@ -143,6 +144,7 @@ def preprocess_opts(parser):
                        help="Source directory for image or audio files.")
 
     group.add_argument('-aux_vec_path', default="", help="Auxiliary vector pickle file")
+    group.add_argument('-retrieved_path', default="")
 
     group.add_argument('-save_data', required=True,
                        help="Output file for the prepared data")
@@ -482,6 +484,8 @@ def translate_opts(parser):
 
     # Options related to aux_vec
     group.add_argument('-aux_vec_path', default="", help="Auxiliary vector pickle file")
+
+    group.add_argument('-retrieved_path', default="")
 
 
 def add_md_help_argument(parser):

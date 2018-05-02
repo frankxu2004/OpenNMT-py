@@ -58,7 +58,7 @@ class GlobalAttention(nn.Module):
        attn_type (str): type of attention to use, options [dot,general,mlp]
 
     """
-    def __init__(self, dim, coverage=False, attn_type="dot"):
+    def __init__(self, dim, coverage=False, attn_type="dot", use_retrieved=False):
         super(GlobalAttention, self).__init__()
 
         self.dim = dim
@@ -74,7 +74,11 @@ class GlobalAttention(nn.Module):
             self.v = nn.Linear(dim, 1, bias=False)
         # mlp wants it with bias
         out_bias = self.attn_type == "mlp"
-        self.linear_out = nn.Linear(dim*2, dim, bias=out_bias)
+        if use_retrieved:
+            self.linear_in_ret = nn.Linear(dim, dim, bias=False)
+            self.linear_out = nn.Linear(dim*3, dim, bias=out_bias)
+        else:
+            self.linear_out = nn.Linear(dim*2, dim, bias=out_bias)
 
         self.sm = nn.Softmax(dim=-1)
         self.tanh = nn.Tanh()
@@ -125,7 +129,50 @@ class GlobalAttention(nn.Module):
 
             return self.v(wquh.view(-1, dim)).view(tgt_batch, tgt_len, src_len)
 
-    def forward(self, input, memory_bank, memory_lengths=None, coverage=None):
+    def score_ret(self, h_t, h_s):
+        """
+        Args:
+          h_t (`FloatTensor`): sequence of queries `[batch x tgt_len x dim]`
+          h_s (`FloatTensor`): sequence of sources `[batch x src_len x dim]`
+
+        Returns:
+          :obj:`FloatTensor`:
+           raw attention scores (unnormalized) for each src index
+          `[batch x tgt_len x src_len]`
+
+        """
+
+        # Check input sizes
+        src_batch, src_len, src_dim = h_s.size()
+        tgt_batch, tgt_len, tgt_dim = h_t.size()
+        aeq(src_batch, tgt_batch)
+        aeq(src_dim, tgt_dim)
+        aeq(self.dim, src_dim)
+
+        if self.attn_type in ["general", "dot"]:
+            if self.attn_type == "general":
+                h_t_ = h_t.view(tgt_batch*tgt_len, tgt_dim)
+                h_t_ = self.linear_in_ret(h_t_)
+                h_t = h_t_.view(tgt_batch, tgt_len, tgt_dim)
+            h_s_ = h_s.transpose(1, 2)
+            # (batch, t_len, d) x (batch, d, s_len) --> (batch, t_len, s_len)
+            return torch.bmm(h_t, h_s_)
+        else:
+            dim = self.dim
+            wq = self.linear_query(h_t.view(-1, dim))
+            wq = wq.view(tgt_batch, tgt_len, 1, dim)
+            wq = wq.expand(tgt_batch, tgt_len, src_len, dim)
+
+            uh = self.linear_context(h_s.contiguous().view(-1, dim))
+            uh = uh.view(src_batch, 1, src_len, dim)
+            uh = uh.expand(src_batch, tgt_len, src_len, dim)
+
+            # (batch, t_len, s_len, d)
+            wquh = self.tanh(wq + uh)
+
+            return self.v(wquh.view(-1, dim)).view(tgt_batch, tgt_len, src_len)
+
+    def forward(self, input, memory_bank, memory_lengths=None, coverage=None, ret_memory_bank=None, ret_memory_lengths=None):
         """
 
         Args:
@@ -180,8 +227,27 @@ class GlobalAttention(nn.Module):
         # over all the source hidden states
         c = torch.bmm(align_vectors, memory_bank)
 
+        # do the same if use retrieved:
+        if ret_memory_bank is not None and ret_memory_lengths is not None:
+            retL = ret_memory_bank.size(1)
+            # compute attention scores, as in Luong et al.
+            align_ret = self.score_ret(input, ret_memory_bank)
+
+            mask_ret = sequence_mask(ret_memory_lengths)
+            mask_ret = mask_ret.unsqueeze(1)  # Make it broadcastable.
+            align_ret.data.masked_fill_(1 - mask_ret, -float('inf'))
+
+            # Softmax to normalize attention weights
+            ret_align_vectors = self.sm(align_ret.view(batch*targetL, retL))
+            ret_align_vectors = ret_align_vectors.view(batch, targetL, retL)
+
+            # each context vector c_t is the weighted average
+            # over all the source hidden states
+            ret_c = torch.bmm(ret_align_vectors, ret_memory_bank)
+            concat_c = torch.cat([c, ret_c, input], 2).view(batch*targetL, dim*3)
         # concatenate
-        concat_c = torch.cat([c, input], 2).view(batch*targetL, dim*2)
+        else:
+            concat_c = torch.cat([c, input], 2).view(batch*targetL, dim*2)
         attn_h = self.linear_out(concat_c).view(batch, targetL, dim)
         if self.attn_type in ["general", "dot"]:
             attn_h = self.tanh(attn_h)
@@ -189,7 +255,10 @@ class GlobalAttention(nn.Module):
         if one_step:
             attn_h = attn_h.squeeze(1)
             align_vectors = align_vectors.squeeze(1)
-
+            if ret_memory_bank is not None and ret_memory_lengths is not None:
+                ret_align_vectors = ret_align_vectors.squeeze(1)
+            else:
+                ret_align_vectors = None
             # Check output sizes
             batch_, dim_ = attn_h.size()
             aeq(batch, batch_)
@@ -200,7 +269,10 @@ class GlobalAttention(nn.Module):
         else:
             attn_h = attn_h.transpose(0, 1).contiguous()
             align_vectors = align_vectors.transpose(0, 1).contiguous()
-
+            if ret_memory_bank is not None and ret_memory_lengths is not None:
+                ret_align_vectors = ret_align_vectors.transpose(0, 1).contiguous()
+            else:
+                ret_align_vectors = None
             # Check output sizes
             targetL_, batch_, dim_ = attn_h.size()
             aeq(targetL, targetL_)
@@ -211,4 +283,4 @@ class GlobalAttention(nn.Module):
             aeq(batch, batch_)
             aeq(sourceL, sourceL_)
 
-        return attn_h, align_vectors
+        return attn_h, align_vectors, ret_align_vectors

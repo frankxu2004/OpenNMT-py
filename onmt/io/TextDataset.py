@@ -5,6 +5,7 @@ from itertools import chain
 import io
 import codecs
 import sys
+import json
 
 import torch
 import torchtext
@@ -89,7 +90,6 @@ class TextDataset(ONMTDatasetBase):
                    and 0 < len(example.tgt) <= tgt_seq_length
 
         filter_pred = filter_pred if use_filter_pred else lambda x: True
-        print(out_examples[0])
         print(out_fields)
         super(TextDataset, self).__init__(
             out_examples, out_fields, filter_pred
@@ -131,7 +131,7 @@ class TextDataset(ONMTDatasetBase):
         return scores
 
     @staticmethod
-    def make_text_examples_nfeats_tpl(path, truncate, side, aux_vec_path=None):
+    def make_text_examples_nfeats_tpl(path, truncate, side, aux_vec_path=None, retrieved_path=None):
         """
         Args:
             path (str): location of a src or tgt file.
@@ -152,6 +152,17 @@ class TextDataset(ONMTDatasetBase):
                 aux_vecs = torch.load(aux_vec_path + 'valid.pkl')
             elif "test" in path:
                 aux_vecs = torch.load(aux_vec_path + 'test.pkl')
+            else:
+                aux_vecs = torch.load(aux_vec_path + 'train.pkl')
+
+        retrieved = None
+        if retrieved_path:
+            if "train" in path:
+                retrieved = json.load(open(retrieved_path + 'train.json', encoding='utf-8'))
+            elif "valid" in path:
+                retrieved = json.load(open(retrieved_path + 'valid.json', encoding='utf-8'))
+            else:
+                retrieved = json.load(open(retrieved_path + 'test.json', encoding='utf-8'))
 
         # All examples have same number of features, so we peek first one
         # to get the num_feats.
@@ -172,6 +183,15 @@ class TextDataset(ONMTDatasetBase):
 
         if aux_vecs is not None:
             examples_nfeats_iter = _add_aux_vec(examples_nfeats_iter, aux_vecs)
+
+        def _add_retrieved(example_iter, retrieved):
+            for example, ret in zip(example_iter, retrieved):
+                example[0]['retrieved_tgt'] = TextDataset.extract_text_features(ret['retrieved']['target'].split())
+                yield example
+
+        if retrieved is not None:
+            examples_nfeats_iter = _add_retrieved(examples_nfeats_iter, retrieved)
+
         examples_iter = (ex for ex, nfeats in examples_nfeats_iter)
 
         return (examples_iter, num_feats)
@@ -265,6 +285,10 @@ class TextDataset(ONMTDatasetBase):
 
         fields["aux_vec"] = torchtext.data.RawField()
 
+        fields['retrieved_tgt'] = torchtext.data.Field(
+            pad_token=PAD_WORD,
+            include_lengths=True)
+
         return fields
 
     @staticmethod
@@ -318,7 +342,7 @@ class ShardedTextCorpusIterator(object):
     """
 
     def __init__(self, corpus_path, line_truncate, side, shard_size,
-                 assoc_iter=None, aux_vec_path=None):
+                 assoc_iter=None, aux_vec_path=None, retrieved_path=None):
         """
         Args:
             corpus_path: the corpus file path.
@@ -344,10 +368,22 @@ class ShardedTextCorpusIterator(object):
         if aux_vec_path:
             if "train" in corpus_path:
                 self.aux_vecs = torch.load(aux_vec_path + 'train.pkl')
-            else:
+            elif "valid" in corpus_path:
                 self.aux_vecs = torch.load(aux_vec_path + 'valid.pkl')
+            else:
+                self.aux_vecs = torch.load(aux_vec_path + 'test.pkl')
         else:
             self.aux_vecs = None
+
+        if retrieved_path:
+            if "train" in corpus_path:
+                self.retrieved = json.load(open(retrieved_path + 'train.json', encoding='utf-8'))
+            elif "valid" in corpus_path:
+                self.retrieved = json.load(open(retrieved_path + 'valid.json', encoding='utf-8'))
+            else:
+                self.retrieved = json.load(open(retrieved_path + 'test.json', encoding='utf-8'))
+        else:
+            self.retrieved = None
         self.last_pos = 0
         self.line_index = -1
         self.eof = False
@@ -400,9 +436,15 @@ class ShardedTextCorpusIterator(object):
                 self.line_index += 1
                 iteration_index += 1
                 if self.aux_vecs:
-                    yield self._example_dict_iter(line, iteration_index, aux_vec=self.aux_vecs[self.line_index])
+                    aux_vec = self.aux_vecs[self.line_index]
                 else:
-                    yield self._example_dict_iter(line, iteration_index)
+                    aux_vec = None
+                if self.retrieved:
+                    retrieved_tgt = self.retrieved[self.line_index]['retrieved']['target'].split()
+                else:
+                    retrieved_tgt = None
+
+                yield self._example_dict_iter(line, iteration_index, aux_vec=aux_vec, retrieved_tgt=retrieved_tgt)
 
     def hit_end(self):
         return self.eof
@@ -422,7 +464,7 @@ class ShardedTextCorpusIterator(object):
 
         return self.n_feats
 
-    def _example_dict_iter(self, line, index, aux_vec=None):
+    def _example_dict_iter(self, line, index, aux_vec=None, retrieved_tgt=None):
         line = line.split()
         if self.line_truncate:
             line = line[:self.line_truncate]
@@ -438,5 +480,8 @@ class ShardedTextCorpusIterator(object):
         if aux_vec is not None:
             assert aux_vec.size(0) == len(words)
             example_dict['aux_vec'] = aux_vec
+        if retrieved_tgt is not None:
+            ret_tgt_words, _, _ = TextDataset.extract_text_features(retrieved_tgt)
+            example_dict['retrieved_tgt'] = ret_tgt_words
 
         return example_dict

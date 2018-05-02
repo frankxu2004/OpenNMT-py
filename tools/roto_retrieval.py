@@ -1,10 +1,13 @@
 import json
+from nltk.translate.bleu_score import sentence_bleu
 from pprint import pprint
 from multiprocessing import Pool
 import munkres
 from sklearn.feature_extraction.text import TfidfVectorizer
 
 # ignore_rels = ['HOME_AWAY', 'TEAM_NAME', 'PLAYER_NAME']
+from tqdm import tqdm
+
 ignore_rels = []
 LARGE_NUM = 10000000
 
@@ -47,18 +50,23 @@ class RecordDataset(object):
 
         print("Number of records and tgts read: ", len(self.records))
         self.normalize_text()
+        self.target_token_set = self.create_token_set()
         self.sklearn_tfidf = TfidfVectorizer(sublinear_tf=True, tokenizer=lambda x: x, preprocessor=lambda x: x,
                                              lowercase=False, token_pattern=None)
-        self.tfidf_score = self.sklearn_tfidf.fit_transform(self.normalized_targets)
+        self.tfidf_score = self.sklearn_tfidf.fit_transform(self.normalized_targets).toarray()
 
     def normalize_text(self):
         for r in self.records:
             tgt_tokens = r['target'].split()
             src_tokens = [str(x.value) for x in r['records']]
-            for i in range(len(tgt_tokens)):
-                if tgt_tokens[i] in src_tokens:
-                    tgt_tokens[i] = 'PLACEHOLDER'
+            tgt_tokens = self.normalize_sent(tgt_tokens, src_tokens)
             self.normalized_targets.append(tgt_tokens)
+
+    def create_token_set(self):
+        token_sets = []
+        for sent in self.normalized_targets:
+            token_sets.append(set(sent))
+        return token_sets
 
     @staticmethod
     def generalized_jaccard(list_a, list_b):
@@ -134,22 +142,36 @@ class RecordDataset(object):
         highest_examples.sort(key=lambda x: x['min_cost'])
         return highest_examples[0]
 
+    @staticmethod
+    def normalize_sent(tgt, src):
+        for i in range(len(tgt)):
+            if tgt[i] in src:
+                try:
+                    int(tgt[i])
+                    tgt[i] = 'NUMBER'
+                except ValueError:
+                    tgt[i] = 'TEXT'
+        return tgt
+
     def retrieve_with_target(self, query_record):
         query_tgt_tokens = query_record['target'].split()
         query_src_tokens = [str(x.value) for x in query_record['records']]
-        for i in range(len(query_tgt_tokens)):
-            if query_tgt_tokens[i] in query_src_tokens:
-                query_tgt_tokens[i] = 'PLACEHOLDER'
+        query_tgt_tokens = self.normalize_sent(query_tgt_tokens, query_src_tokens)
+        query_token_set = set(query_tgt_tokens)
 
         scores = []
-        for idx, sent in enumerate(self.normalized_targets):
-            score = 0
-            for token in query_tgt_tokens:
-                if token in sent:
-                    score += self.tfidf_score[idx, self.sklearn_tfidf.vocabulary_[token]]
-            scores.append((idx, score))
+        for idx, tokens in enumerate(self.normalized_targets):
+            if query_record['target'] != self.records[idx]['target']:
+                # scores.append((idx, sentence_bleu([query_tgt_tokens], tokens)))
+                # scores.append((idx, self.generalized_jaccard(tokens, query_tgt_tokens)))
+                score = 0
+                for token in tokens:
+                    if token in query_token_set:
+                        score += self.tfidf_score[idx, self.sklearn_tfidf.vocabulary_[token]]
+                scores.append((idx, score))
         scores.sort(key=lambda x: x[1], reverse=True)
-        filtered_indexes, total_cost = self.calculate_alignment(query_record['records'], self.records[scores[0][0]]['records'])
+        filtered_indexes, total_cost = self.calculate_alignment(query_record['records'],
+                                                                self.records[scores[0][0]]['records'])
         return {'score': scores[0][1], 'cost': total_cost, 'alignment': filtered_indexes,
                 'retrieved': self.records[scores[0][0]], 'query': query_record}
 
@@ -165,17 +187,20 @@ def retrieve_with_target(query_record):
 def main():
     global rd
     rd = RecordDataset('../data/rotowire/roto-sent-data.train.src', '../data/rotowire/roto-sent-data.train.tgt')
+    print('Start training retrieval')
     with Pool(24) as p:
         retrieved = p.map(retrieve_with_target, rd.records)
     with open('retrieved_target_train.json', 'w', encoding='utf-8') as of:
         json.dump(retrieved, of, cls=MyEncoder)
 
+    print('Start valid retrieval')
     vrd = RecordDataset('../data/rotowire/roto-sent-data.valid.src', '../data/rotowire/roto-sent-data.valid.tgt')
     with Pool(24) as p:
         retrieved = p.map(retrieve_with_target, vrd.records)
     with open('retrieved_target_valid.json', 'w', encoding='utf-8') as of:
         json.dump(retrieved, of, cls=MyEncoder)
 
+    print('Start valid retrieval')
     trd = RecordDataset('../data/rotowire/roto-sent-data.test.src', '../data/rotowire/roto-sent-data.test.tgt')
     with Pool(24) as p:
         retrieved = p.map(retrieve_with_target, trd.records)

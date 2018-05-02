@@ -162,7 +162,6 @@ class Trainer(object):
         for i, batch in enumerate(train_iter):
             cur_dataset = train_iter.get_cur_dataset()
             self.train_loss.cur_dataset = cur_dataset
-
             true_batchs.append(batch)
             accum += 1
             if self.norm_method == "tokens":
@@ -215,6 +214,7 @@ class Trainer(object):
 
             src = onmt.io.make_features(batch, 'src', self.data_type)
             aux_vec = getattr(batch, 'aux_vec', None)
+            retrieved_tgt = getattr(batch, 'retrieved_tgt', None)
 
             if self.data_type == 'text':
                 _, src_lengths = batch.src
@@ -224,7 +224,7 @@ class Trainer(object):
             tgt = onmt.io.make_features(batch, 'tgt')
 
             # F-prop through the model.
-            outputs, attns, _ = self.model(src, tgt, src_lengths, aux_vec=aux_vec)
+            outputs, attns, _ = self.model(src, tgt, src_lengths, aux_vec=aux_vec, retrieved_tgt=retrieved_tgt)
 
             # Compute loss.
             batch_stats = self.valid_loss.monolithic_compute_loss(
@@ -271,8 +271,8 @@ class Trainer(object):
             tgt_sorted = batch.tgt.data.index_select(1, perm)
 
             decoder_outputs.extend(torch.unbind(outputs.data.index_select(1, perm), dim=1))
-            alignments.extend(torch.unbind(attns['std'].data.index_select(1, perm), dim=1))
-            # alignments.extend(torch.unbind(mul_attn.data.index_select(1, perm), dim=1))
+            # alignments.extend(torch.unbind(attns['std'].data.index_select(1, perm), dim=1))
+            alignments.extend(torch.unbind(mul_attn.data.index_select(1, perm), dim=1))
             data.extend(zip(torch.unbind(src_sorted, dim=1), torch.unbind(src_feat_0_sorted, dim=1),
                             torch.unbind(src_feat_1_sorted, dim=1), torch.unbind(src_lengths_sorted, dim=0),
                             torch.unbind(tgt_sorted, dim=1)))
@@ -334,6 +334,7 @@ class Trainer(object):
             dec_state = None
             src = onmt.io.make_features(batch, 'src', self.data_type)
             aux_vec = getattr(batch, 'aux_vec', None)
+            retrieved_tgt = getattr(batch, 'retrieved_tgt', None)
 
             if self.data_type == 'text':
                 _, src_lengths = batch.src
@@ -351,7 +352,7 @@ class Trainer(object):
                 if self.grad_accum_count == 1:
                     self.model.zero_grad()
                 outputs, attns, dec_state = \
-                    self.model(src, tgt, src_lengths, dec_state, aux_vec=aux_vec)
+                    self.model(src, tgt, src_lengths, dec_state, aux_vec=aux_vec, retrieved_tgt=retrieved_tgt)
 
                 # 3. Compute loss in shards for memory efficiency.
                 batch_stats = self.train_loss.sharded_compute_loss(

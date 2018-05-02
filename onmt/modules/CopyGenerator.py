@@ -113,7 +113,7 @@ class CopyGenerator(nn.Module):
 
         # Probability of copying p(z=1) batch.
         p_copy = F.sigmoid(self.linear_copy(hidden))
-        mul_attn = torch.mul(attn, p_copy.expand_as(attn))
+        mul_attn = torch.mul(attn, 1 - p_copy.expand_as(attn))
 
         return p_copy.view(-1, batch_size), mul_attn.view(-1, batch_size, mul_attn.size(1))
 

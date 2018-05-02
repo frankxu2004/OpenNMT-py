@@ -9,7 +9,8 @@ import onmt.opts
 def main(opt):
     translator = make_translator(opt, report_score=True)
     translator.translate(opt.src_dir, opt.src, opt.tgt,
-                         opt.batch_size, opt.attn_debug, aux_vec_path=opt.aux_vec_path)
+                         opt.batch_size, opt.attn_debug,
+                         aux_vec_path=opt.aux_vec_path, retrieved_path=opt.retrieved_path)
 
 
 if __name__ == "__main__":

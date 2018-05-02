@@ -47,6 +47,7 @@ class EncoderBase(nn.Module):
           E-->F
           E-->G
     """
+
     def _check_args(self, input, lengths=None, hidden=None):
         s_len, n_batch, n_feats = input.size()
         if lengths is not None:
@@ -77,7 +78,8 @@ class MeanEncoder(EncoderBase):
        num_layers (int): number of replicated layers
        embeddings (:obj:`onmt.modules.Embeddings`): embedding module to use
     """
-    def __init__(self, num_layers, embeddings, with_aux=False):
+
+    def __init__(self, num_layers, embeddings, with_aux=False, retrieved_embeddings=None, rnn_size=None, dropout=None):
         super(MeanEncoder, self).__init__()
         self.num_layers = num_layers
         self.embeddings = embeddings
@@ -86,8 +88,15 @@ class MeanEncoder(EncoderBase):
             # self.mlp = nn.Linear(600, 200)
             # self.mlp1 = nn.Linear(800, 600)
             self.mlp = nn.Linear(1200, 600)
+        self.retrieved_embeddings = retrieved_embeddings
+        if self.retrieved_embeddings:
+            self.hidden_size = rnn_size
+            self.rnn_encoder = RNNEncoder("LSTM", True, num_layers, rnn_size,
+                                          dropout=dropout, embeddings=self.retrieved_embeddings)
+            self.h_linear = nn.Linear(2 * self.hidden_size, self.hidden_size)
+            self.c_linear = nn.Linear(2 * self.hidden_size, self.hidden_size)
 
-    def forward(self, src, lengths=None, encoder_state=None, aux_vec=None):
+    def forward(self, src, lengths=None, encoder_state=None, aux_vec=None, retrieved_tgt=None):
         "See :obj:`EncoderBase.forward()`"
         self._check_args(src, lengths, encoder_state)
         emb = self.embeddings(src)
@@ -107,7 +116,41 @@ class MeanEncoder(EncoderBase):
         memory_bank = emb
 
         encoder_final = (mean, mean)
-        return encoder_final, memory_bank
+
+        if self.retrieved_embeddings and retrieved_tgt is not None:
+            ret_tgt, lengths_tgt = retrieved_tgt
+            ret_tgt = ret_tgt.unsqueeze(2)
+            lengths_sorted, perm = torch.sort(lengths_tgt, descending=True)
+            ret_tgt_sorted = ret_tgt[:, perm]
+            ret_encoder_final, ret_memory_bank = self.rnn_encoder(ret_tgt_sorted, lengths=lengths_sorted)
+            _, orig_idx = perm.sort(0)
+            ret_encoder_final = (ret_encoder_final[0][:, orig_idx, :], ret_encoder_final[1][:, orig_idx, :])
+            ret_memory_bank = ret_memory_bank[:, orig_idx, :]
+
+            def _fix_enc_hidden(h):
+                # The encoder hidden is  (layers*directions) x batch x dim.
+                # We need to convert it to layers x batch x (directions*dim).
+                h = torch.cat([h[0:h.size(0):2], h[1:h.size(0):2]], 2)
+                return h
+
+            if self.rnn_encoder.bidirectional:
+                ret_encoder_final = tuple([_fix_enc_hidden(enc_hid)
+                                           for enc_hid in ret_encoder_final])
+
+            def bottle_hidden(linear, states):
+                """
+                Transform from 3D to 2D, apply linear and return initial size
+                """
+                size = states.size()
+                result = linear(states.view(-1, self.hidden_size * self.num_layers))
+                return F.relu(result).view(size[0], size[1], -1)
+
+            encoder_final = (bottle_hidden(self.h_linear, torch.cat([encoder_final[0], ret_encoder_final[0]], dim=2)),
+                             bottle_hidden(self.c_linear, torch.cat([encoder_final[1], ret_encoder_final[1]], dim=2)))
+
+            return encoder_final, memory_bank, ret_memory_bank
+        else:
+            return encoder_final, memory_bank, None
 
 
 class RNNEncoder(EncoderBase):
@@ -122,12 +165,13 @@ class RNNEncoder(EncoderBase):
        dropout (float) : dropout value for :obj:`nn.Dropout`
        embeddings (:obj:`onmt.modules.Embeddings`): embedding module to use
     """
+
     def __init__(self, rnn_type, bidirectional, num_layers,
                  hidden_size, dropout=0.0, embeddings=None,
                  use_bridge=False):
         super(RNNEncoder, self).__init__()
         assert embeddings is not None
-
+        self.bidirectional = bidirectional
         num_directions = 2 if bidirectional else 1
         assert hidden_size % num_directions == 0
         hidden_size = hidden_size // num_directions
@@ -189,6 +233,7 @@ class RNNEncoder(EncoderBase):
         """
         Forward hidden state through bridge
         """
+
         def bottle_hidden(linear, states):
             """
             Transform from 3D to 2D, apply linear and return initial size
@@ -251,11 +296,12 @@ class RNNDecoderBase(nn.Module):
        dropout (float) : dropout value for :obj:`nn.Dropout`
        embeddings (:obj:`onmt.modules.Embeddings`): embedding module to use
     """
+
     def __init__(self, rnn_type, bidirectional_encoder, num_layers,
                  hidden_size, attn_type="general",
                  coverage_attn=False, context_gate=None,
                  copy_attn=False, dropout=0.0, embeddings=None,
-                 reuse_copy_attn=False):
+                 reuse_copy_attn=False, use_retrieved=False):
         super(RNNDecoderBase, self).__init__()
 
         # Basic attributes.
@@ -283,9 +329,11 @@ class RNNDecoderBase(nn.Module):
 
         # Set up the standard attention.
         self._coverage = coverage_attn
+        self._use_retrieved = use_retrieved
+
         self.attn = onmt.modules.GlobalAttention(
             hidden_size, coverage=coverage_attn,
-            attn_type=attn_type
+            attn_type=attn_type, use_retrieved=self._use_retrieved
         )
 
         # Set up a separated copy attention layer, if needed.
@@ -298,7 +346,7 @@ class RNNDecoderBase(nn.Module):
             self._copy = True
         self._reuse_copy_attn = reuse_copy_attn
 
-    def forward(self, tgt, memory_bank, state, memory_lengths=None):
+    def forward(self, tgt, memory_bank, state, memory_lengths=None, ret_memory_bank=None, ret_memory_lengths=None):
         """
         Args:
             tgt (`LongTensor`): sequences of padded tokens
@@ -326,7 +374,8 @@ class RNNDecoderBase(nn.Module):
 
         # Run the forward pass of the RNN.
         decoder_final, decoder_outputs, attns = self._run_forward_pass(
-            tgt, memory_bank, state, memory_lengths=memory_lengths)
+            tgt, memory_bank, state, memory_lengths=memory_lengths,
+            ret_memory_bank=ret_memory_bank, ret_memory_lengths=ret_memory_lengths)
 
         # Update the state with the result.
         final_output = decoder_outputs[-1]
@@ -353,7 +402,7 @@ class RNNDecoderBase(nn.Module):
         if isinstance(encoder_final, tuple):  # LSTM
             return RNNDecoderState(self.hidden_size,
                                    tuple([_fix_enc_hidden(enc_hid)
-                                         for enc_hid in encoder_final]))
+                                          for enc_hid in encoder_final]))
         else:  # GRU
             return RNNDecoderState(self.hidden_size,
                                    _fix_enc_hidden(encoder_final))
@@ -374,6 +423,7 @@ class StdRNNDecoder(RNNDecoderBase):
     Implemented without input_feeding and currently with no `coverage_attn`
     or `copy_attn` support.
     """
+
     def _run_forward_pass(self, tgt, memory_bank, state, memory_lengths=None):
         """
         Private helper for running the specific RNN forward pass.
@@ -418,7 +468,7 @@ class StdRNNDecoder(RNNDecoderBase):
         decoder_outputs, p_attn = self.attn(
             rnn_output.transpose(0, 1).contiguous(),
             memory_bank.transpose(0, 1),
-            memory_lengths=memory_lengths
+            memory_lengths=memory_lengths,
         )
         attns["std"] = p_attn
 
@@ -474,7 +524,7 @@ class InputFeedRNNDecoder(RNNDecoderBase):
           G --> H
     """
 
-    def _run_forward_pass(self, tgt, memory_bank, state, memory_lengths=None):
+    def _run_forward_pass(self, tgt, memory_bank, state, memory_lengths=None, ret_memory_bank=None, ret_memory_lengths=None):
         """
         See StdRNNDecoder._run_forward_pass() for description
         of arguments and return values.
@@ -493,6 +543,8 @@ class InputFeedRNNDecoder(RNNDecoderBase):
             attns["copy"] = []
         if self._coverage:
             attns["coverage"] = []
+        if self._use_retrieved:
+            attns['ret'] = []
 
         emb = self.embeddings(tgt)
         assert emb.dim() == 3  # len x batch x embedding_dim
@@ -508,10 +560,12 @@ class InputFeedRNNDecoder(RNNDecoderBase):
             decoder_input = torch.cat([emb_t, input_feed], 1)
 
             rnn_output, hidden = self.rnn(decoder_input, hidden)
-            decoder_output, p_attn = self.attn(
+            decoder_output, p_attn, ret_attn = self.attn(
                 rnn_output,
                 memory_bank.transpose(0, 1),
-                memory_lengths=memory_lengths)
+                memory_lengths=memory_lengths,
+                ret_memory_bank=ret_memory_bank.transpose(0, 1),
+                ret_memory_lengths=ret_memory_lengths)
             if self.context_gate is not None:
                 # TODO: context gate should be employed
                 # instead of second RNN transform.
@@ -523,6 +577,8 @@ class InputFeedRNNDecoder(RNNDecoderBase):
 
             decoder_outputs += [decoder_output]
             attns["std"] += [p_attn]
+            if ret_attn is not None:
+                attns['ret'] += [ret_attn]
 
             # Update the coverage attention.
             if self._coverage:
@@ -543,7 +599,7 @@ class InputFeedRNNDecoder(RNNDecoderBase):
     def _build_rnn(self, rnn_type, input_size,
                    hidden_size, num_layers, dropout):
         assert not rnn_type == "SRU", "SRU doesn't support input feed! " \
-                "Please set -input_feed 0!"
+                                      "Please set -input_feed 0!"
         if rnn_type == "LSTM":
             stacked_cell = onmt.modules.StackedLSTM
         else:
@@ -569,13 +625,14 @@ class NMTModel(nn.Module):
       decoder (:obj:`RNNDecoderBase`): a decoder object
       multi<gpu (bool): setup for multigpu support
     """
+
     def __init__(self, encoder, decoder, multigpu=False):
         self.multigpu = multigpu
         super(NMTModel, self).__init__()
         self.encoder = encoder
         self.decoder = decoder
 
-    def forward(self, src, tgt, lengths, dec_state=None, aux_vec=None):
+    def forward(self, src, tgt, lengths, dec_state=None, aux_vec=None, retrieved_tgt=None):
         """Forward propagate a `src` and `tgt` pair for training.
         Possible initialized with a beginning decoder state.
 
@@ -597,14 +654,18 @@ class NMTModel(nn.Module):
                  * final decoder state
         """
         tgt = tgt[:-1]  # exclude last target from inputs
-        enc_final, memory_bank = self.encoder(src, lengths, aux_vec=aux_vec)
+        enc_final, memory_bank, ret_memory_bank = self.encoder(src, lengths, aux_vec=aux_vec,
+                                                               retrieved_tgt=retrieved_tgt)
         enc_state = \
             self.decoder.init_decoder_state(src, memory_bank, enc_final)
+
         decoder_outputs, dec_state, attns = \
             self.decoder(tgt, memory_bank,
                          enc_state if dec_state is None
                          else dec_state,
-                         memory_lengths=lengths)
+                         memory_lengths=lengths,
+                         ret_memory_bank=ret_memory_bank,
+                         ret_memory_lengths=None if retrieved_tgt is None else retrieved_tgt[1])
         if self.multigpu:
             # Not yet supported on multi-gpu
             dec_state = None
@@ -620,6 +681,7 @@ class DecoderState(object):
 
     Modules need to implement this to utilize beam search decoding.
     """
+
     def detach(self):
         for h in self._all:
             if h is not None:
