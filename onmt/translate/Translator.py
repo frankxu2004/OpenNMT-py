@@ -271,7 +271,9 @@ class Translator(object):
         if data_type == 'text':
             _, src_lengths = batch.src
         aux_vec = getattr(batch, 'aux_vec', None)
-        enc_states, memory_bank = self.model.encoder(src, src_lengths, aux_vec=aux_vec)
+        retrieved_tgt = getattr(batch, 'retrieved_tgt', None)
+        ret_lengths = None if retrieved_tgt is None else retrieved_tgt[1]
+        enc_states, memory_bank, ret_memory_bank = self.model.encoder(src, src_lengths, aux_vec=aux_vec, retrieved_tgt=retrieved_tgt)
         dec_states = self.model.decoder.init_decoder_state(
             src, memory_bank, enc_states)
 
@@ -286,6 +288,9 @@ class Translator(object):
         memory_bank = rvar(memory_bank.data)
         memory_lengths = src_lengths.repeat(beam_size)
         dec_states.repeat_beam_size_times(beam_size)
+
+        ret_memory_bank = rvar(ret_memory_bank.data) if ret_memory_bank is not None else None
+        ret_memory_lengths = ret_lengths.repeat(beam_size) if ret_lengths is not None else None
 
         # (3) run the decoder to generate sentences, using beam search.
         for i in range(self.max_length):
@@ -309,7 +314,8 @@ class Translator(object):
 
             # Run one step.
             dec_out, dec_states, attn = self.model.decoder(
-                inp, memory_bank, dec_states, memory_lengths=memory_lengths)
+                inp, memory_bank, dec_states, memory_lengths=memory_lengths, ret_memory_bank=ret_memory_bank,
+                ret_memory_lengths=ret_memory_lengths)
             dec_out = dec_out.squeeze(0)
             # dec_out: beam x rnn_size
 

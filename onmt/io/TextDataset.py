@@ -186,7 +186,7 @@ class TextDataset(ONMTDatasetBase):
 
         def _add_retrieved(example_iter, retrieved):
             for example, ret in zip(example_iter, retrieved):
-                example[0]['retrieved_tgt'] = TextDataset.extract_text_features(ret['retrieved']['target'].split())
+                example[0]['retrieved_tgt'] = TextDataset.extract_text_features(ret['retrieved']['target'].split())[0]
                 yield example
 
         if retrieved is not None:
