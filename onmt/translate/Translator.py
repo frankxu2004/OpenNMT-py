@@ -39,7 +39,7 @@ def make_translator(opt, report_score=True, out_file=None):
 
     translator = Translator(model, fields, global_scorer=scorer,
                             out_file=out_file, report_score=report_score,
-                            copy_attn=model_opt.copy_attn, **kwargs)
+                            copy_attn=model_opt.copy_attn, use_retrieved=model_opt.use_retrieved, **kwargs)
     return translator
 
 
@@ -70,6 +70,7 @@ class Translator(object):
                  max_length=100,
                  global_scorer=None,
                  copy_attn=False,
+                 use_retrieved=False,
                  gpu=False,
                  dump_beam="",
                  min_length=0,
@@ -97,6 +98,7 @@ class Translator(object):
         self.max_length = max_length
         self.global_scorer = global_scorer
         self.copy_attn = copy_attn
+        self.use_retrieved = use_retrieved
         self.beam_size = beam_size
         self.min_length = min_length
         self.stepwise_penalty = stepwise_penalty
@@ -187,7 +189,8 @@ class Translator(object):
                     header_format = "{:>10.10} " + "{:>10.7} " * len(srcs)
                     row_format = "{:>10.10} " + "{:>10.7f} " * len(srcs)
                     if src_feats:
-                        output = header_format.format("", *list(map(lambda x: '|'.join(x), zip(trans.src_raw, *src_feats)))) + '\n'
+                        output = header_format.format("", *list(
+                            map(lambda x: '|'.join(x), zip(trans.src_raw, *src_feats)))) + '\n'
                     else:
                         output = header_format.format("", *trans.src_raw) + '\n'
                     for word, row in zip(preds, attns):
@@ -255,9 +258,11 @@ class Translator(object):
                 for __ in range(batch_size)]
 
         # Help functions for working with beams and batches
-        def var(a): return Variable(a, volatile=True)
+        def var(a):
+            return Variable(a, volatile=True)
 
-        def rvar(a): return var(a.repeat(1, beam_size, 1))
+        def rvar(a):
+            return var(a.repeat(1, beam_size, 1))
 
         def bottle(m):
             return m.view(batch_size * beam_size, -1)
@@ -273,14 +278,15 @@ class Translator(object):
         aux_vec = getattr(batch, 'aux_vec', None)
         retrieved_tgt = getattr(batch, 'retrieved_tgt', None)
         ret_lengths = None if retrieved_tgt is None else retrieved_tgt[1]
-        enc_states, memory_bank, ret_memory_bank = self.model.encoder(src, src_lengths, aux_vec=aux_vec, retrieved_tgt=retrieved_tgt)
+        enc_states, memory_bank, ret_memory_bank = self.model.encoder(src, src_lengths, aux_vec=aux_vec,
+                                                                      retrieved_tgt=retrieved_tgt)
         dec_states = self.model.decoder.init_decoder_state(
             src, memory_bank, enc_states)
 
         if src_lengths is None:
-            src_lengths = torch.Tensor(batch_size).type_as(memory_bank.data)\
-                                                  .long()\
-                                                  .fill_(memory_bank.size(0))
+            src_lengths = torch.Tensor(batch_size).type_as(memory_bank.data) \
+                .long() \
+                .fill_(memory_bank.size(0))
 
         # (2) Repeat src objects `beam_size` times.
         src_map = rvar(batch.src_map.data) \
@@ -289,6 +295,8 @@ class Translator(object):
         memory_lengths = src_lengths.repeat(beam_size)
         dec_states.repeat_beam_size_times(beam_size)
 
+        ret_src_map = rvar(batch.ret_src_map.data) \
+            if data_type == 'text' and self.copy_attn and self.use_retrieved else None
         ret_memory_bank = rvar(ret_memory_bank.data) if ret_memory_bank is not None else None
         ret_memory_lengths = ret_lengths.repeat(beam_size) if ret_lengths is not None else None
 
@@ -326,13 +334,23 @@ class Translator(object):
                 # beam x tgt_vocab
                 beam_attn = unbottle(attn["std"])
             else:
-                out = self.model.generator.forward(dec_out,
-                                                   attn["copy"].squeeze(0),
-                                                   src_map)
-                # beam x (tgt_vocab + extra_vocab)
-                out = data.collapse_copy_scores(
-                    unbottle(out.data),
-                    batch, self.fields["tgt"].vocab, data.src_vocabs)
+                if self.use_retrieved:
+                    out, _ = self.model.generator.forward(dec_out,
+                                                          attn["copy"].squeeze(0),
+                                                          src_map,
+                                                          attn["ret"].squeeze(0),
+                                                          ret_src_map)
+                    out = data.collapse_copy_scores(
+                        unbottle(out.data),
+                        batch, self.fields["tgt"].vocab, data.src_vocabs, ret_vocabs=data.ret_vocabs)
+                else:
+                    out = self.model.generator.forward(dec_out,
+                                                       attn["copy"].squeeze(0),
+                                                       src_map)
+                    # beam x (tgt_vocab + extra_vocab)
+                    out = data.collapse_copy_scores(
+                        unbottle(out.data),
+                        batch, self.fields["tgt"].vocab, data.src_vocabs)
                 # beam x tgt_vocab
                 out = out.log()
                 beam_attn = unbottle(attn["copy"])

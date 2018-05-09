@@ -21,7 +21,6 @@ import onmt.modules
 from onmt.Utils import use_gpu
 import onmt.opts
 
-
 parser = argparse.ArgumentParser(
     description='train.py',
     formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -74,6 +73,7 @@ if opt.exp_host != "":
 
 if opt.tensorboard:
     from tensorboardX import SummaryWriter
+
     writer = SummaryWriter(
         opt.tensorboard_log_dir + datetime.now().strftime("/%b-%d_%H-%M-%S"),
         comment="Onmt")
@@ -215,9 +215,13 @@ def make_loss_compute(model, tgt_vocab, opt, train=True):
     own *LossCompute class, by subclassing LossComputeBase.
     """
     if opt.copy_attn:
-        compute = onmt.modules.CopyGeneratorLossCompute(
-            model.generator, tgt_vocab, opt.copy_attn_force,
-            opt.copy_loss_by_seqlength)
+        if opt.use_retrieved:
+            compute = onmt.modules.RetCopyGeneratorLossCompute(model.generator, tgt_vocab, opt.copy_attn_force,
+                                                               opt.copy_loss_by_seqlength)
+        else:
+            compute = onmt.modules.CopyGeneratorLossCompute(
+                model.generator, tgt_vocab, opt.copy_attn_force,
+                opt.copy_loss_by_seqlength)
     else:
         compute = onmt.Loss.NMTLossCompute(
             model.generator, tgt_vocab,

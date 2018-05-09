@@ -5,6 +5,8 @@ from onmt.modules.ConvMultiStepAttention import ConvMultiStepAttention
 from onmt.modules.ImageEncoder import ImageEncoder
 from onmt.modules.AudioEncoder import AudioEncoder
 from onmt.modules.CopyGenerator import CopyGenerator, CopyGeneratorLossCompute
+from onmt.modules.RetCopyGenerator import RetCopyGenerator, RetCopyGeneratorLossCompute
+
 from onmt.modules.StructuredAttention import MatrixTree
 from onmt.modules.Transformer import \
    TransformerEncoder, TransformerDecoder, PositionwiseFeedForward
@@ -33,7 +35,8 @@ __all__ = [EncoderBase, MeanEncoder, RNNDecoderBase, InputFeedRNNDecoder,
            TransformerEncoder, TransformerDecoder, Embeddings, Elementwise,
            MatrixTree, WeightNormConv2d, ConvMultiStepAttention,
            CNNEncoder, CNNDecoder, StackedLSTM, StackedGRU,
-           context_gate_factory, CopyGeneratorLossCompute, AudioEncoder]
+           context_gate_factory, CopyGeneratorLossCompute, AudioEncoder,
+           RetCopyGenerator, RetCopyGeneratorLossCompute]
 
 if can_use_sru:
     __all__.extend([SRU, check_sru_requirement])

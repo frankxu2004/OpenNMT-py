@@ -46,6 +46,7 @@ class TextDataset(ONMTDatasetBase):
         # self.src_vocabs: mutated in dynamic_dict, used in
         # collapse_copy_scores and in Translator.py
         self.src_vocabs = []
+        self.ret_vocabs = []
 
         self.n_src_feats = num_src_feats
         self.n_tgt_feats = num_tgt_feats
@@ -104,7 +105,7 @@ class TextDataset(ONMTDatasetBase):
         return len(ex.src)
 
     @staticmethod
-    def collapse_copy_scores(scores, batch, tgt_vocab, src_vocabs):
+    def collapse_copy_scores(scores, batch, tgt_vocab, src_vocabs, ret_vocabs=None):
         """
         Given scores from an expanded dictionary
         corresponeding to a batch, sums together copies,
@@ -122,6 +123,15 @@ class TextDataset(ONMTDatasetBase):
                 if ti != 0:
                     blank.append(offset + i)
                     fill.append(ti)
+
+            if ret_vocabs:
+                ret_vocab = ret_vocabs[index]
+                for i in range(1, len(ret_vocab)):
+                    sw = ret_vocab.itos[i]
+                    ti = tgt_vocab.stoi[sw]
+                    if ti != 0:
+                        blank.append(offset + len(src_vocab) + i)
+                        fill.append(ti)
             if blank:
                 blank = torch.Tensor(blank).type_as(batch.indices.data)
                 fill = torch.Tensor(fill).type_as(batch.indices.data)
@@ -289,6 +299,15 @@ class TextDataset(ONMTDatasetBase):
             pad_token=PAD_WORD,
             include_lengths=True)
 
+        # for retrieved copy
+        fields["ret_src_map"] = torchtext.data.Field(
+            use_vocab=False, tensor_type=torch.FloatTensor,
+            postprocessing=make_src, sequential=False)
+
+        fields["ret_alignment"] = torchtext.data.Field(
+            use_vocab=False, tensor_type=torch.LongTensor,
+            postprocessing=make_tgt, sequential=False)
+
         return fields
 
     @staticmethod
@@ -328,6 +347,22 @@ class TextDataset(ONMTDatasetBase):
                 mask = torch.LongTensor(
                     [0] + [src_vocab.stoi[w] for w in tgt] + [0])
                 example["alignment"] = mask
+
+            if "retrieved_tgt" in example:
+                ret = example['retrieved_tgt']
+                ret_vocab = torchtext.vocab.Vocab(Counter(ret),
+                                                  specials=[UNK_WORD, PAD_WORD])
+                self.ret_vocabs.append(ret_vocab)
+                # Mapping source tokens to indices in the dynamic dict.
+                ret_map = torch.LongTensor([ret_vocab.stoi[w] for w in ret])
+                example["ret_src_map"] = ret_map
+
+                if "tgt" in example:
+                    tgt = example["tgt"]
+                    mask = torch.LongTensor(
+                        [0] + [ret_vocab.stoi[w] for w in tgt] + [0])
+                    example["ret_alignment"] = mask
+
             yield example
 
 
