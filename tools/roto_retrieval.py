@@ -4,12 +4,113 @@ from pprint import pprint
 from multiprocessing import Pool
 import munkres
 from sklearn.feature_extraction.text import TfidfVectorizer
+from text2num import text2num, NumberException
 
 # ignore_rels = ['HOME_AWAY', 'TEAM_NAME', 'PLAYER_NAME']
 from tqdm import tqdm
 
 ignore_rels = []
 LARGE_NUM = 10000000
+
+prons = {"he", "He", "him", "Him", "his", "His", "they", "They", "them", "Them", "their", "Their"}  # leave out "it"
+singular_prons = {"he", "He", "him", "Him", "his", "His"}
+plural_prons = {"they", "They", "them", "Them", "their", "Their"}
+
+number_words = {"one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve",
+                "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen", "twenty", "thirty",
+                "forty", "fifty", "sixty", "seventy", "eighty", "ninety", "hundred", "thousand"}
+
+# load all entities
+with open("all_ents.json", encoding='utf-8') as f:
+    all_ents = set(json.load(f))
+
+
+def deterministic_resolve(pron, players, teams, cities, curr_ents, prev_ents, max_back=1):
+    # we'll just take closest compatible one.
+    # first look in current sentence; if there's an antecedent here return None, since
+    # we'll catch it anyway
+    for j in range(len(curr_ents) - 1, -1, -1):
+        if pron in singular_prons and curr_ents[j][2] in players:
+            return None
+        elif pron in plural_prons and curr_ents[j][2] in teams:
+            return None
+        elif pron in plural_prons and curr_ents[j][2] in cities:
+            return None
+
+    # then look in previous max_back sentences
+    if len(prev_ents) > 0:
+        for i in range(len(prev_ents) - 1, len(prev_ents) - 1 - max_back, -1):
+            for j in range(len(prev_ents[i]) - 1, -1, -1):
+                if pron in singular_prons and prev_ents[i][j][2] in players:
+                    return prev_ents[i][j]
+                elif pron in plural_prons and prev_ents[i][j][2] in teams:
+                    return prev_ents[i][j]
+                elif pron in plural_prons and prev_ents[i][j][2] in cities:
+                    return prev_ents[i][j]
+    return None
+
+
+def extract_entities(sent, all_ents, prons, prev_ents=None, resolve_prons=False,
+                     players=None, teams=None, cities=None):
+    sent_ents = []
+    i = 0
+    while i < len(sent):
+        if sent[i] in prons:
+            if resolve_prons:
+                referent = deterministic_resolve(sent[i], players, teams, cities, sent_ents, prev_ents)
+                if referent is None:
+                    sent_ents.append((i, i + 1, sent[i], True))  # is a pronoun
+                else:
+                    # print "replacing", sent[i], "with", referent[2], "in", " ".join(sent)
+                    sent_ents.append(
+                        (i, i + 1, referent[2], False))  # pretend it's not a pron and put in matching string
+            else:
+                sent_ents.append((i, i + 1, sent[i], True))  # is a pronoun
+            i += 1
+        elif sent[i] in all_ents:  # findest longest spans; only works if we put in words...
+            j = 1
+            while i + j <= len(sent) and " ".join(sent[i:i + j]) in all_ents:
+                j += 1
+            sent_ents.append((i, i + j - 1, " ".join(sent[i:i + j - 1]), False))
+            i += j - 1
+        else:
+            i += 1
+    return sent_ents
+
+
+def annoying_number_word(sent, i):
+    ignores = {"three point", "three - point", "three - pt", "three pt", "three - pointer",
+               "three - pointers", "three pointers", "three - points"}
+    return " ".join(sent[i:i + 3]) not in ignores and " ".join(sent[i:i + 2]) not in ignores
+
+
+def extract_numbers(sent):
+    sent_nums = []
+    i = 0
+    # print sent
+    while i < len(sent):
+        toke = sent[i]
+        a_number = False
+        try:
+            itoke = int(toke)
+            a_number = True
+        except ValueError:
+            pass
+        if a_number:
+            sent_nums.append((i, i + 1, int(toke)))
+            i += 1
+        elif toke in number_words and annoying_number_word(sent, i):  # get longest span  (this is kind of stupid)
+            j = 1
+            while i + j <= len(sent) and sent[i + j] in number_words and annoying_number_word(sent, i + j):
+                j += 1
+            try:
+                sent_nums.append((i, i + j, text2num(" ".join(sent[i:i + j]))))
+            except NumberException:
+                sent_nums.append((i, i + 1, text2num(sent[i])))
+            i += j
+        else:
+            i += 1
+    return sent_nums
 
 
 class Record(object):
@@ -58,8 +159,7 @@ class RecordDataset(object):
     def normalize_text(self):
         for r in self.records:
             tgt_tokens = r['target'].split()
-            src_tokens = [str(x.value) for x in r['records']]
-            tgt_tokens = self.normalize_sent(tgt_tokens, src_tokens)
+            tgt_tokens = self.normalize_sent(tgt_tokens)
             self.normalized_targets.append(tgt_tokens)
 
     def create_token_set(self):
@@ -67,6 +167,32 @@ class RecordDataset(object):
         for sent in self.normalized_targets:
             token_sets.append(set(sent))
         return token_sets
+
+    @staticmethod
+    def normalize_sent(tgt):
+        ents = extract_entities(tgt, all_ents, prons)
+        nums = extract_numbers(tgt)
+        ranges = []
+        for ent in ents:
+            ranges.append((ent[0], ent[1], 'ENT'))
+        for num in nums:
+            ranges.append((num[0], num[1], 'NUM'))
+        ranges.sort(key=lambda x: x[0])
+
+        masked_sent = []
+        i = 0
+        while i < len(tgt):
+            match = False
+            for r in ranges:
+                if i == r[0]:
+                    match = True
+                    masked_sent.append(r[2])
+                    i = r[1]
+                    break
+            if not match:
+                masked_sent.append(tgt[i])
+                i += 1
+        return masked_sent
 
     @staticmethod
     def generalized_jaccard(list_a, list_b):
@@ -142,25 +268,13 @@ class RecordDataset(object):
         highest_examples.sort(key=lambda x: x['min_cost'])
         return highest_examples[0]
 
-    @staticmethod
-    def normalize_sent(tgt, src):
-        for i in range(len(tgt)):
-            if tgt[i] in src:
-                try:
-                    int(tgt[i])
-                    tgt[i] = 'NUMBER'
-                except ValueError:
-                    tgt[i] = 'TEXT'
-        return tgt
-
     def retrieve_with_target(self, query_record):
         query_tgt_tokens = query_record['target'].split()
-        query_src_tokens = [str(x.value) for x in query_record['records']]
-        query_tgt_tokens = self.normalize_sent(query_tgt_tokens, query_src_tokens)
+        query_tgt_tokens = self.normalize_sent(query_tgt_tokens)
         query_token_set = set(query_tgt_tokens)
 
         scores = []
-        for idx, tokens in enumerate(self.normalized_targets):
+        for idx, tokens in enumerate(self.target_token_set):
             if query_record['target'] != self.records[idx]['target']:
                 # scores.append((idx, sentence_bleu([query_tgt_tokens], tokens)))
                 # scores.append((idx, self.generalized_jaccard(tokens, query_tgt_tokens)))
@@ -169,6 +283,20 @@ class RecordDataset(object):
                     if token in query_token_set:
                         score += self.tfidf_score[idx, self.sklearn_tfidf.vocabulary_[token]]
                 scores.append((idx, score))
+        scores.sort(key=lambda x: x[1], reverse=True)
+        filtered_indexes, total_cost = self.calculate_alignment(query_record['records'],
+                                                                self.records[scores[0][0]]['records'])
+        return {'score': scores[0][1], 'cost': total_cost, 'alignment': filtered_indexes,
+                'retrieved': self.records[scores[0][0]], 'query': query_record}
+
+    def retrieve_with_target_bleu(self, query_record):
+        query_tgt_tokens = query_record['target'].split()
+        query_tgt_tokens = self.normalize_sent(query_tgt_tokens)
+
+        scores = []
+        for idx, tokens in enumerate(self.normalized_targets):
+            if query_record['target'] != self.records[idx]['target']:
+                scores.append((idx, sentence_bleu([query_tgt_tokens], tokens)))
         scores.sort(key=lambda x: x[1], reverse=True)
         filtered_indexes, total_cost = self.calculate_alignment(query_record['records'],
                                                                 self.records[scores[0][0]]['records'])
@@ -184,28 +312,77 @@ def retrieve_with_target(query_record):
     return rd.retrieve_with_target(query_record)
 
 
+def retrieve_with_target_bleu(query_record):
+    return rd.retrieve_with_target_bleu(query_record)
+
+
 def main():
+    use_target = False
+    use_bleu = True
     global rd
     rd = RecordDataset('../data/rotowire/roto-sent-data.train.src', '../data/rotowire/roto-sent-data.train.tgt')
-    print('Start training retrieval')
-    with Pool(24) as p:
-        retrieved = p.map(retrieve_with_target, rd.records)
-    with open('retrieved_target_train.json', 'w', encoding='utf-8') as of:
-        json.dump(retrieved, of, cls=MyEncoder)
+    if not use_target:
+        print('Start training retrieval')
+        with Pool(24) as p:
+            retrieved = p.map(retrieve, rd.records)
+        with open('retrieved_train.json', 'w', encoding='utf-8') as of:
+            json.dump(retrieved, of, cls=MyEncoder)
 
-    print('Start valid retrieval')
-    vrd = RecordDataset('../data/rotowire/roto-sent-data.valid.src', '../data/rotowire/roto-sent-data.valid.tgt')
-    with Pool(24) as p:
-        retrieved = p.map(retrieve_with_target, vrd.records)
-    with open('retrieved_target_valid.json', 'w', encoding='utf-8') as of:
-        json.dump(retrieved, of, cls=MyEncoder)
+        print('Start valid retrieval')
+        vrd = RecordDataset('../data/rotowire/roto-sent-data.valid.src', '../data/rotowire/roto-sent-data.valid.tgt')
+        with Pool(24) as p:
+            retrieved = p.map(retrieve, vrd.records)
+        with open('retrieved_valid.json', 'w', encoding='utf-8') as of:
+            json.dump(retrieved, of, cls=MyEncoder)
 
-    print('Start valid retrieval')
-    trd = RecordDataset('../data/rotowire/roto-sent-data.test.src', '../data/rotowire/roto-sent-data.test.tgt')
-    with Pool(24) as p:
-        retrieved = p.map(retrieve_with_target, trd.records)
-    with open('retrieved_target_test.json', 'w', encoding='utf-8') as of:
-        json.dump(retrieved, of, cls=MyEncoder)
+        print('Start valid retrieval')
+        trd = RecordDataset('../data/rotowire/roto-sent-data.test.src', '../data/rotowire/roto-sent-data.test.tgt')
+        with Pool(24) as p:
+            retrieved = p.map(retrieve, trd.records)
+        with open('retrieved_test.json', 'w', encoding='utf-8') as of:
+            json.dump(retrieved, of, cls=MyEncoder)
+    else:
+        if not use_bleu:
+            print('Start training retrieval')
+            with Pool(24) as p:
+                retrieved = p.map(retrieve_with_target, rd.records)
+            with open('retrieved_target_train.json', 'w', encoding='utf-8') as of:
+                json.dump(retrieved, of, cls=MyEncoder)
+
+            print('Start valid retrieval')
+            vrd = RecordDataset('../data/rotowire/roto-sent-data.valid.src', '../data/rotowire/roto-sent-data.valid.tgt')
+            with Pool(24) as p:
+                retrieved = p.map(retrieve_with_target, vrd.records)
+            with open('retrieved_target_valid.json', 'w', encoding='utf-8') as of:
+                json.dump(retrieved, of, cls=MyEncoder)
+
+            print('Start valid retrieval')
+            trd = RecordDataset('../data/rotowire/roto-sent-data.test.src', '../data/rotowire/roto-sent-data.test.tgt')
+            with Pool(24) as p:
+                retrieved = p.map(retrieve_with_target, trd.records)
+            with open('retrieved_target_test.json', 'w', encoding='utf-8') as of:
+                json.dump(retrieved, of, cls=MyEncoder)
+
+        else:
+            print('Start training retrieval')
+            with Pool(24) as p:
+                retrieved = p.map(retrieve_with_target_bleu, rd.records)
+            with open('retrieved_target_bleu_train.json', 'w', encoding='utf-8') as of:
+                json.dump(retrieved, of, cls=MyEncoder)
+
+            print('Start valid retrieval')
+            vrd = RecordDataset('../data/rotowire/roto-sent-data.valid.src', '../data/rotowire/roto-sent-data.valid.tgt')
+            with Pool(24) as p:
+                retrieved = p.map(retrieve_with_target_bleu, vrd.records)
+            with open('retrieved_target_bleu_valid.json', 'w', encoding='utf-8') as of:
+                json.dump(retrieved, of, cls=MyEncoder)
+
+            print('Start valid retrieval')
+            trd = RecordDataset('../data/rotowire/roto-sent-data.test.src', '../data/rotowire/roto-sent-data.test.tgt')
+            with Pool(24) as p:
+                retrieved = p.map(retrieve_with_target_bleu, trd.records)
+            with open('retrieved_target_bleu_test.json', 'w', encoding='utf-8') as of:
+                json.dump(retrieved, of, cls=MyEncoder)
 
 
 if __name__ == '__main__':

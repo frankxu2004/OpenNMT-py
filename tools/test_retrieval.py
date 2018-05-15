@@ -1,7 +1,14 @@
 import json
 
-with open('retrieved_target_train.json', encoding='utf-8') as of:
-    retrieved = json.load(of)
+filename = 'retrieved_target_valid'
+
+with open(filename + '.json', encoding='utf-8') as f:
+    retrieved = json.load(f)
+
+with open(filename + '.ret', 'w', encoding='utf-8') as f:
+    for item in retrieved:
+        f.write(item['retrieved']['target'] + '\n')
+
 
 for item in retrieved:
     print('Q: ', item['query']['target'])

@@ -105,7 +105,7 @@ class TextDataset(ONMTDatasetBase):
         return len(ex.src)
 
     @staticmethod
-    def collapse_copy_scores(scores, batch, tgt_vocab, src_vocabs, ret_vocabs=None):
+    def collapse_copy_scores(scores, batch, tgt_vocab, src_vocabs, ret_offset=None, ret_vocabs=None):
         """
         Given scores from an expanded dictionary
         corresponeding to a batch, sums together copies,
@@ -130,7 +130,7 @@ class TextDataset(ONMTDatasetBase):
                     sw = ret_vocab.itos[i]
                     ti = tgt_vocab.stoi[sw]
                     if ti != 0:
-                        blank.append(offset + len(src_vocab) + i)
+                        blank.append(offset + ret_offset + i)
                         fill.append(ti)
             if blank:
                 blank = torch.Tensor(blank).type_as(batch.indices.data)

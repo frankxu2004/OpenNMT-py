@@ -225,6 +225,7 @@ class RetCopyGeneratorLossCompute(onmt.Loss.LossComputeBase):
         scores_data = onmt.io.TextDataset.collapse_copy_scores(
             self._unbottle(scores_data, batch.batch_size),
             batch, self.tgt_vocab, self.cur_dataset.src_vocabs,
+            ret_offset=source_size,
             ret_vocabs=self.cur_dataset.ret_vocabs)
         scores_data = self._bottle(scores_data)
 

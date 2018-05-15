@@ -27,12 +27,17 @@ class TranslationBuilder(object):
         self.replace_unk = replace_unk
         self.has_tgt = has_tgt
 
-    def _build_target_tokens(self, src, src_vocab, src_raw, pred, attn):
+    def _build_target_tokens(self, src, src_vocab, src_size, ret_vocab, src_raw, pred, attn):
         vocab = self.fields["tgt"].vocab
         tokens = []
         for tok in pred:
             if tok < len(vocab):
                 tokens.append(vocab.itos[tok])
+            elif src_size is not None:
+                if tok < len(vocab) + src_size:
+                    tokens.append(src_vocab.itos[tok - len(vocab)])
+                else:
+                    tokens.append(ret_vocab.itos[tok - len(vocab) - src_size])
             else:
                 tokens.append(src_vocab.itos[tok - len(vocab)])
             if tokens[-1] == onmt.io.EOS_WORD:
@@ -50,7 +55,7 @@ class TranslationBuilder(object):
         assert(len(translation_batch["gold_score"]) ==
                len(translation_batch["predictions"]))
         batch_size = batch.batch_size
-
+        src_size = translation_batch.get('src_size', None)
         preds, pred_score, attn, gold_score, indices = list(zip(
             *sorted(zip(translation_batch["predictions"],
                         translation_batch["scores"],
@@ -58,7 +63,6 @@ class TranslationBuilder(object):
                         translation_batch["gold_score"],
                         batch.indices.data),
                     key=lambda x: x[-1])))
-
         # Sorting
         inds, perm = torch.sort(batch.indices.data)
         data_type = self.data.data_type
@@ -77,6 +81,8 @@ class TranslationBuilder(object):
             if data_type == 'text':
                 src_vocab = self.data.src_vocabs[inds[b]] \
                   if self.data.src_vocabs else None
+                ret_vocab = self.data.ret_vocabs[inds[b]] \
+                  if self.data.ret_vocabs else None
                 src_raw = self.data.examples[inds[b]].src
                 src_attr_dict = self.data.examples[inds[b]].__dict__
                 src_feats = []
@@ -85,18 +91,19 @@ class TranslationBuilder(object):
                         src_feats.append(getattr(self.data.examples[inds[b]], src_attr))
             else:
                 src_vocab = None
+                ret_vocab = None
                 src_raw = None
                 src_feats = None
             pred_sents = [self._build_target_tokens(
                 src[:, b] if src is not None else None,
-                src_vocab, src_raw,
+                src_vocab, src_size, ret_vocab, src_raw,
                 preds[b][n], attn[b][n])
                           for n in range(self.n_best)]
             gold_sent = None
             if tgt is not None:
                 gold_sent = self._build_target_tokens(
                     src[:, b] if src is not None else None,
-                    src_vocab, src_raw,
+                    src_vocab, src_size, ret_vocab, src_raw,
                     tgt[1:, b] if tgt is not None else None, None)
 
             translation = Translation(src[:, b] if src is not None else None,

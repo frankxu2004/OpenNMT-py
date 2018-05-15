@@ -564,7 +564,7 @@ class InputFeedRNNDecoder(RNNDecoderBase):
                 rnn_output,
                 memory_bank.transpose(0, 1),
                 memory_lengths=memory_lengths,
-                ret_memory_bank=ret_memory_bank.transpose(0, 1),
+                ret_memory_bank=ret_memory_bank.transpose(0, 1) if ret_memory_bank is not None else None,
                 ret_memory_lengths=ret_memory_lengths)
             if self.context_gate is not None:
                 # TODO: context gate should be employed

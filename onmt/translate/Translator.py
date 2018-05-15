@@ -300,6 +300,7 @@ class Translator(object):
         ret_memory_bank = rvar(ret_memory_bank.data) if ret_memory_bank is not None else None
         ret_memory_lengths = ret_lengths.repeat(beam_size) if ret_lengths is not None else None
 
+        src_size = None
         # (3) run the decoder to generate sentences, using beam search.
         for i in range(self.max_length):
             if all((b.done() for b in beam)):
@@ -335,14 +336,16 @@ class Translator(object):
                 beam_attn = unbottle(attn["std"])
             else:
                 if self.use_retrieved:
-                    out, _ = self.model.generator.forward(dec_out,
-                                                          attn["copy"].squeeze(0),
-                                                          src_map,
-                                                          attn["ret"].squeeze(0),
-                                                          ret_src_map)
+                    out, source_size = self.model.generator.forward(dec_out,
+                                                                    attn["copy"].squeeze(0),
+                                                                    src_map,
+                                                                    attn["ret"].squeeze(0),
+                                                                    ret_src_map)
+                    src_size = source_size
                     out = data.collapse_copy_scores(
                         unbottle(out.data),
-                        batch, self.fields["tgt"].vocab, data.src_vocabs, ret_vocabs=data.ret_vocabs)
+                        batch, self.fields["tgt"].vocab, data.src_vocabs,
+                        ret_offset=source_size, ret_vocabs=data.ret_vocabs)
                 else:
                     out = self.model.generator.forward(dec_out,
                                                        attn["copy"].squeeze(0),
@@ -367,6 +370,8 @@ class Translator(object):
         if "tgt" in batch.__dict__:
             ret["gold_score"] = self._run_target(batch, data)
         ret["batch"] = batch
+        if src_size:
+            ret['src_size'] = src_size
         return ret
 
     def _from_beam(self, beam):
