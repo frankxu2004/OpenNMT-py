@@ -1,6 +1,7 @@
-# OpenNMT-py: Open-Source Neural Machine Translation
+# PyTorch implementation of the Challenges in Data-to-Document Generation in OpenNMT-py
 
-[![Build Status](https://travis-ci.org/OpenNMT/OpenNMT-py.svg?branch=master)](https://travis-ci.org/OpenNMT/OpenNMT-py)
+Work in progress:
+Original ideas and paper and datasets: https://github.com/harvardnlp/data2text
 
 This is a [Pytorch](https://github.com/pytorch/pytorch)
 port of [OpenNMT](https://github.com/OpenNMT/OpenNMT),
